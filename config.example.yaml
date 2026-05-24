@@ -1,0 +1,10 @@
+server_url: https://nuage.example.com
+token: your-api-token-here
+sync_dir: ~/Nuage
+poll_interval: 30
+ignore_patterns:
+  - ".DS_Store"
+  - "*.tmp"
+  - ".nuage/"
+  - "Thumbs.db"
+  - ".git/"
