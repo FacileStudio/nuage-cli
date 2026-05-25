@@ -26,16 +26,32 @@ pub struct ApiFolder {
 pub struct SyncStateResponse {
     pub files: Vec<ApiFile>,
     pub folders: Vec<ApiFolder>,
+    pub server_time: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncChangesResponse {
-    pub created_files: Vec<ApiFile>,
-    pub updated_files: Vec<ApiFile>,
-    pub deleted_file_ids: Vec<i64>,
-    pub created_folders: Vec<ApiFolder>,
-    pub updated_folders: Vec<ApiFolder>,
-    pub deleted_folder_ids: Vec<i64>,
+    pub files: FileChanges,
+    pub folders: FolderChanges,
+    pub server_time: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileChanges {
+    pub changed: Vec<ApiFile>,
+    pub deleted: Vec<DeletedItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FolderChanges {
+    pub changed: Vec<ApiFolder>,
+    pub deleted: Vec<DeletedItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeletedItem {
+    pub id: i64,
+    pub name: String,
 }
 
 pub struct ApiClient {

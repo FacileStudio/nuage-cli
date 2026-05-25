@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 use std::path::Path;
 
+#[allow(dead_code)]
 pub struct FileRecord {
     pub id: i64,
     pub facile_id: String,
@@ -15,6 +16,7 @@ pub struct FileRecord {
     pub synced_at: String,
 }
 
+#[allow(dead_code)]
 pub struct FolderRecord {
     pub id: i64,
     pub facile_id: String,
@@ -239,69 +241,6 @@ impl SyncState {
             )
             .context("failed to remove folder record")?;
         Ok(())
-    }
-
-    pub fn all_files(&self) -> Result<Vec<FileRecord>> {
-        let mut stmt = self
-            .db
-            .prepare(
-                "SELECT id, facile_id, name, local_path, hash, size, folder_id, \
-                 remote_updated_at, local_modified_at, synced_at FROM files",
-            )
-            .context("failed to prepare all files query")?;
-
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(FileRecord {
-                    id: row.get(0)?,
-                    facile_id: row.get(1)?,
-                    name: row.get(2)?,
-                    local_path: row.get(3)?,
-                    hash: row.get(4)?,
-                    size: row.get(5)?,
-                    folder_id: row.get(6)?,
-                    remote_updated_at: row.get(7)?,
-                    local_modified_at: row.get(8)?,
-                    synced_at: row.get(9)?,
-                })
-            })
-            .context("failed to query all files")?;
-
-        let mut files = Vec::new();
-        for row in rows {
-            files.push(row.context("failed to read file row")?);
-        }
-        Ok(files)
-    }
-
-    pub fn all_folders(&self) -> Result<Vec<FolderRecord>> {
-        let mut stmt = self
-            .db
-            .prepare(
-                "SELECT id, facile_id, name, local_path, parent_id, remote_updated_at, synced_at \
-                 FROM folders",
-            )
-            .context("failed to prepare all folders query")?;
-
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(FolderRecord {
-                    id: row.get(0)?,
-                    facile_id: row.get(1)?,
-                    name: row.get(2)?,
-                    local_path: row.get(3)?,
-                    parent_id: row.get(4)?,
-                    remote_updated_at: row.get(5)?,
-                    synced_at: row.get(6)?,
-                })
-            })
-            .context("failed to query all folders")?;
-
-        let mut folders = Vec::new();
-        for row in rows {
-            folders.push(row.context("failed to read folder row")?);
-        }
-        Ok(folders)
     }
 
     pub fn file_count(&self) -> Result<i64> {

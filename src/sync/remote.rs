@@ -1,15 +1,14 @@
 use anyhow::Result;
 
-use crate::api::{ApiClient, ApiFile, ApiFolder, SyncChangesResponse};
+use crate::api::{ApiClient, ApiFile, ApiFolder};
 use crate::sync::state::SyncState;
 
 pub struct RemoteChanges {
-    pub new_files: Vec<ApiFile>,
-    pub updated_files: Vec<ApiFile>,
+    pub changed_files: Vec<ApiFile>,
     pub deleted_file_ids: Vec<i64>,
-    pub new_folders: Vec<ApiFolder>,
-    pub updated_folders: Vec<ApiFolder>,
+    pub changed_folders: Vec<ApiFolder>,
     pub deleted_folder_ids: Vec<i64>,
+    pub server_time: String,
     pub is_full_sync: bool,
 }
 
@@ -18,35 +17,26 @@ pub async fn fetch_remote_changes(api: &ApiClient, state: &SyncState) -> Result<
 
     match cursor {
         None => {
-            let remote_state = api.sync_state().await?;
+            let resp = api.sync_state().await?;
 
             Ok(RemoteChanges {
-                new_files: remote_state.files,
-                updated_files: Vec::new(),
+                changed_files: resp.files,
                 deleted_file_ids: Vec::new(),
-                new_folders: remote_state.folders,
-                updated_folders: Vec::new(),
+                changed_folders: resp.folders,
                 deleted_folder_ids: Vec::new(),
+                server_time: resp.server_time,
                 is_full_sync: true,
             })
         }
         Some(since) => {
-            let SyncChangesResponse {
-                created_files,
-                updated_files,
-                deleted_file_ids,
-                created_folders,
-                updated_folders,
-                deleted_folder_ids,
-            } = api.sync_changes(&since).await?;
+            let resp = api.sync_changes(&since).await?;
 
             Ok(RemoteChanges {
-                new_files: created_files,
-                updated_files,
-                deleted_file_ids,
-                new_folders: created_folders,
-                updated_folders,
-                deleted_folder_ids,
+                changed_files: resp.files.changed,
+                deleted_file_ids: resp.files.deleted.iter().map(|d| d.id).collect(),
+                changed_folders: resp.folders.changed,
+                deleted_folder_ids: resp.folders.deleted.iter().map(|d| d.id).collect(),
+                server_time: resp.server_time,
                 is_full_sync: false,
             })
         }

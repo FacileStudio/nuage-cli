@@ -72,8 +72,7 @@ impl SyncEngine {
 
         let changes = remote::fetch_remote_changes(&self.api, &self.state).await?;
 
-        report.folders_created += self.process_remote_folders(&changes.new_folders).await?;
-        report.folders_created += self.process_remote_folders(&changes.updated_folders).await?;
+        report.folders_created += self.process_remote_folders(&changes.changed_folders).await?;
 
         for folder_id in &changes.deleted_folder_ids {
             self.handle_deleted_remote_folder(*folder_id)?;
@@ -81,14 +80,9 @@ impl SyncEngine {
         }
 
         let download_result = self
-            .process_remote_files(&changes.new_files, &mut report)
+            .process_remote_files(&changes.changed_files, &mut report)
             .await?;
         report.downloaded += download_result;
-
-        let update_result = self
-            .process_remote_files(&changes.updated_files, &mut report)
-            .await?;
-        report.downloaded += update_result;
 
         for file_id in &changes.deleted_file_ids {
             if self.handle_deleted_remote_file(*file_id)? {
@@ -101,8 +95,7 @@ impl SyncEngine {
             report.uploaded += upload_result;
         }
 
-        let now = chrono::Utc::now().to_rfc3339();
-        self.state.set_cursor(&now)?;
+        self.state.set_cursor(&changes.server_time)?;
 
         Ok(report)
     }
