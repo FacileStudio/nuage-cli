@@ -398,7 +398,6 @@ async fn cmd_upgrade() -> Result<()> {
             "--git",
             "https://github.com/FacileStudio/nuage-cli.git",
             "--force",
-            "--quiet",
         ])
         .status()?;
     if !status.success() {
