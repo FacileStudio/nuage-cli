@@ -402,6 +402,8 @@ impl SyncEngine {
     }
 
     async fn upload_untracked_files(&self) -> Result<usize> {
+        self.ensure_all_local_folders().await?;
+
         let mut uploaded = 0;
         let local_files = self.scan_local_files()?;
 
@@ -616,6 +618,36 @@ impl SyncEngine {
             .unwrap_or(path)
             .to_string_lossy()
             .to_string()
+    }
+
+    async fn ensure_all_local_folders(&self) -> Result<()> {
+        let mut folders = Vec::new();
+        self.scan_local_folders(&self.sync_dir, &mut folders)?;
+        folders.sort_by_key(|(rel, _)| rel.matches('/').count());
+
+        for (_, full_path) in folders {
+            self.ensure_remote_folder(&full_path).await?;
+        }
+        Ok(())
+    }
+
+    fn scan_local_folders(&self, dir: &Path, folders: &mut Vec<(String, PathBuf)>) -> Result<()> {
+        let entries = std::fs::read_dir(dir)
+            .with_context(|| format!("cannot read directory: {}", dir.display()))?;
+
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                let relative = self.relative_path(&path);
+                if self.ignore.is_ignored(&relative) {
+                    continue;
+                }
+                folders.push((relative, path.clone()));
+                self.scan_local_folders(&path, folders)?;
+            }
+        }
+        Ok(())
     }
 
     fn scan_local_files(&self) -> Result<Vec<(String, PathBuf)>> {
