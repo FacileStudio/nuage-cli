@@ -101,18 +101,121 @@ impl SyncEngine {
     }
 
     pub async fn process_local_changes(&self, paths: Vec<PathBuf>) -> Result<()> {
+        let mut deleted_paths: Vec<PathBuf> = Vec::new();
+        let mut existing_paths: Vec<PathBuf> = Vec::new();
+
         for path in paths {
-            if !path.exists() {
-                self.handle_local_delete(&path).await?;
+            if path.exists() {
+                existing_paths.push(path);
+            } else {
+                deleted_paths.push(path);
+            }
+        }
+
+        let mut handled_deletes: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for path in &existing_paths {
+            if path.is_dir() {
+                let relative = self.relative_path(path);
+                if self.state.get_folder(&relative)?.is_some() {
+                    continue;
+                }
+                let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                if let Some(deleted) = deleted_paths.iter().find(|d| {
+                    let d_rel = self.relative_path(d);
+                    self.state.get_folder(&d_rel).ok().flatten().map(|r| r.name == name || {
+                        let d_parent = Path::new(&d_rel).parent().map(|p| p.to_string_lossy().to_string());
+                        let new_parent = Path::new(&relative).parent().map(|p| p.to_string_lossy().to_string());
+                        d_parent == new_parent
+                    }).unwrap_or(false)
+                }) {
+                    let d_rel = self.relative_path(deleted);
+                    if let Some(record) = self.state.get_folder(&d_rel)? {
+                        let facile_id: i64 = record.facile_id.parse().unwrap_or(0);
+                        if facile_id > 0 {
+                            let new_name = path.file_name().map(|n| n.to_string_lossy().to_string());
+                            let new_parent_id = self.find_parent_folder_id(&relative)?;
+                            let name_ref = new_name.as_deref();
+                            let parent_arg = if new_parent_id != record.parent_id { Some(new_parent_id) } else { None };
+                            let api_folder = self.api.update_folder(facile_id, name_ref, parent_arg).await?;
+                            let now = chrono::Utc::now().to_rfc3339();
+                            self.state.remove_folder(&d_rel)?;
+                            self.state.upsert_folder(
+                                &api_folder.id.to_string(),
+                                &api_folder.name,
+                                &relative,
+                                api_folder.parent_id,
+                                Some(&api_folder.updated_at),
+                                &now,
+                            )?;
+                            info!("↺ renamed folder: {} → {}", record.name, api_folder.name);
+                            handled_deletes.insert(d_rel);
+                            continue;
+                        }
+                    }
+                }
+                self.ensure_remote_folder(path).await?;
                 continue;
             }
 
-            if path.is_dir() {
-                self.ensure_remote_folder(&path).await?;
-            } else {
-                self.handle_local_file_change(&path).await?;
+            let relative = self.relative_path(path);
+            let current_hash = hash::hash_file(path)?;
+
+            if let Some(record) = self.state.get_file(&relative)? {
+                if record.hash.as_deref() == Some(&current_hash) {
+                    continue;
+                }
+                self.handle_local_file_change(path).await?;
+                continue;
             }
+
+            if let Some(old_record) = self.state.get_file_by_hash(&current_hash)? {
+                let old_path = self.sync_dir.join(&old_record.local_path);
+                if !old_path.exists() {
+                    let facile_id: i64 = old_record.facile_id.parse().unwrap_or(0);
+                    if facile_id > 0 {
+                        let new_name = path.file_name().map(|n| n.to_string_lossy().to_string());
+                        let new_folder_id = self.find_parent_folder_id(&relative)?;
+                        let name_ref = new_name.as_deref();
+                        let folder_arg = if new_folder_id != old_record.folder_id { Some(new_folder_id) } else { None };
+                        let api_file = self.api.update_file(facile_id, name_ref, folder_arg).await?;
+                        let now = chrono::Utc::now().to_rfc3339();
+                        let metadata = std::fs::metadata(path).ok();
+                        let local_mtime = metadata
+                            .and_then(|m| m.modified().ok())
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs() as i64);
+
+                        self.state.remove_file(&old_record.local_path)?;
+                        self.state.upsert_file(
+                            &api_file.id.to_string(),
+                            &api_file.name,
+                            &relative,
+                            Some(&current_hash),
+                            api_file.size,
+                            api_file.folder_id,
+                            Some(&api_file.updated_at),
+                            local_mtime,
+                            &now,
+                        )?;
+                        info!("↺ renamed {} → {}", old_record.name, api_file.name);
+                        handled_deletes.insert(old_record.local_path);
+                        continue;
+                    }
+                }
+            }
+
+            self.handle_local_file_change(path).await?;
         }
+
+        for path in deleted_paths {
+            let relative = self.relative_path(&path);
+            if handled_deletes.contains(&relative) {
+                continue;
+            }
+            self.handle_local_delete(&path).await?;
+        }
+
         Ok(())
     }
 

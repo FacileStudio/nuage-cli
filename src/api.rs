@@ -207,6 +207,64 @@ impl ApiClient {
             .context("failed to parse create folder response")
     }
 
+    pub async fn update_file(&self, id: i64, name: Option<&str>, folder_id: Option<Option<i64>>) -> Result<ApiFile> {
+        let mut body = serde_json::Map::new();
+        if let Some(n) = name {
+            body.insert("name".into(), serde_json::json!(n));
+        }
+        if let Some(fid) = folder_id {
+            body.insert("folder_id".into(), serde_json::json!(fid.unwrap_or(0)));
+        }
+
+        let resp = self
+            .client
+            .put(format!("{}/files/{}", self.base_url, id))
+            .bearer_auth(&self.token)
+            .json(&body)
+            .send()
+            .await
+            .with_context(|| format!("failed to update file {}", id))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("PUT /files/{} failed ({}): {}", id, status, body_text);
+        }
+
+        resp.json()
+            .await
+            .with_context(|| format!("failed to parse update file {} response", id))
+    }
+
+    pub async fn update_folder(&self, id: i64, name: Option<&str>, parent_id: Option<Option<i64>>) -> Result<ApiFolder> {
+        let mut body = serde_json::Map::new();
+        if let Some(n) = name {
+            body.insert("name".into(), serde_json::json!(n));
+        }
+        if let Some(pid) = parent_id {
+            body.insert("parent_id".into(), serde_json::json!(pid.unwrap_or(0)));
+        }
+
+        let resp = self
+            .client
+            .put(format!("{}/folders/{}", self.base_url, id))
+            .bearer_auth(&self.token)
+            .json(&body)
+            .send()
+            .await
+            .with_context(|| format!("failed to update folder {}", id))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("PUT /folders/{} failed ({}): {}", id, status, body_text);
+        }
+
+        resp.json()
+            .await
+            .with_context(|| format!("failed to parse update folder {} response", id))
+    }
+
     pub async fn delete_file(&self, id: i64) -> Result<()> {
         let resp = self
             .client

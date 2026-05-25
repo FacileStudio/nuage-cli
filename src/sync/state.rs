@@ -255,6 +255,38 @@ impl SyncState {
             .context("failed to count folders")
     }
 
+    pub fn get_file_by_hash(&self, hash: &str) -> Result<Option<FileRecord>> {
+        let mut stmt = self
+            .db
+            .prepare(
+                "SELECT id, facile_id, name, local_path, hash, size, folder_id, \
+                 remote_updated_at, local_modified_at, synced_at \
+                 FROM files WHERE hash = ?1 LIMIT 1",
+            )
+            .context("failed to prepare file query by hash")?;
+
+        let result = stmt.query_row(params![hash], |row| {
+            Ok(FileRecord {
+                id: row.get(0)?,
+                facile_id: row.get(1)?,
+                name: row.get(2)?,
+                local_path: row.get(3)?,
+                hash: row.get(4)?,
+                size: row.get(5)?,
+                folder_id: row.get(6)?,
+                remote_updated_at: row.get(7)?,
+                local_modified_at: row.get(8)?,
+                synced_at: row.get(9)?,
+            })
+        });
+
+        match result {
+            Ok(rec) => Ok(Some(rec)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e).context("failed to get file by hash"),
+        }
+    }
+
     pub fn get_file_by_facile_id(&self, facile_id: &str) -> Result<Option<FileRecord>> {
         let mut stmt = self
             .db
