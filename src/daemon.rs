@@ -33,8 +33,8 @@ pub fn is_running() -> Result<Option<u32>> {
     };
 
     let pid: u32 = match contents.trim().parse() {
-        Ok(p) => p,
-        Err(_) => {
+        Ok(p) if p > 0 => p,
+        _ => {
             let _ = std::fs::remove_file(&path);
             return Ok(None);
         }

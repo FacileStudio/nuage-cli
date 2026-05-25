@@ -109,8 +109,6 @@ fn cmd_start() -> Result<()> {
         .context("failed to clone log file handle")?;
 
     let pid_file = daemon::pid_path()?;
-    let nuage_dir = daemon::nuage_dir()?;
-    std::fs::create_dir_all(&nuage_dir)?;
 
     println!("[nuage] starting daemon...");
 
