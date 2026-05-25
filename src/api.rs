@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::multipart;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -62,7 +63,14 @@ pub struct ApiClient {
 
 impl ApiClient {
     pub fn new(base_url: &str, token: &str) -> Self {
+        let origin = Self::extract_origin(base_url);
+        let mut headers = HeaderMap::new();
+        if let Ok(val) = HeaderValue::from_str(&origin) {
+            headers.insert("origin", val);
+        }
+
         let client = reqwest::Client::builder()
+            .default_headers(headers.clone())
             .timeout(Duration::from_secs(30))
             .build()
             .expect("failed to build HTTP client");
@@ -75,10 +83,26 @@ impl ApiClient {
     }
 
     fn transfer_client(&self) -> reqwest::Client {
+        let origin = Self::extract_origin(&self.base_url);
+        let mut headers = HeaderMap::new();
+        if let Ok(val) = HeaderValue::from_str(&origin) {
+            headers.insert("origin", val);
+        }
+
         reqwest::Client::builder()
+            .default_headers(headers)
             .timeout(Duration::from_secs(300))
             .build()
             .expect("failed to build transfer HTTP client")
+    }
+
+    fn extract_origin(base_url: &str) -> String {
+        if let Ok(u) = reqwest::Url::parse(base_url) {
+            let port = u.port().map(|p| format!(":{p}")).unwrap_or_default();
+            format!("{}://{}{}", u.scheme(), u.host_str().unwrap_or(""), port)
+        } else {
+            base_url.to_string()
+        }
     }
 
     pub async fn sync_state(&self) -> Result<SyncStateResponse> {
