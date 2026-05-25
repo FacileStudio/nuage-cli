@@ -155,6 +155,7 @@ impl SyncEngine {
                     }
                 }
                 self.ensure_remote_folder(path).await?;
+                self.sync_folder_contents(path).await?;
                 continue;
             }
 
@@ -224,8 +225,9 @@ impl SyncEngine {
     }
 
     async fn process_remote_folders(&self, folders: &[ApiFolder]) -> Result<usize> {
+        let sorted = Self::topo_sort_folders(folders);
         let mut count = 0;
-        for folder in folders {
+        for folder in &sorted {
             let local_path = self.resolve_folder_path(folder);
             std::fs::create_dir_all(&local_path)
                 .with_context(|| format!("cannot create folder: {}", local_path.display()))?;
@@ -243,6 +245,49 @@ impl SyncEngine {
             count += 1;
         }
         Ok(count)
+    }
+
+    fn topo_sort_folders(folders: &[ApiFolder]) -> Vec<ApiFolder> {
+        use std::collections::{HashMap, VecDeque};
+
+        let id_set: HashMap<i64, usize> = folders.iter().enumerate().map(|(i, f)| (f.id, i)).collect();
+        let mut in_degree: Vec<usize> = vec![0; folders.len()];
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); folders.len()];
+
+        for (i, folder) in folders.iter().enumerate() {
+            if let Some(pid) = folder.parent_id {
+                if let Some(&parent_idx) = id_set.get(&pid) {
+                    in_degree[i] += 1;
+                    children[parent_idx].push(i);
+                }
+            }
+        }
+
+        let mut queue: VecDeque<usize> = VecDeque::new();
+        for (i, &deg) in in_degree.iter().enumerate() {
+            if deg == 0 {
+                queue.push_back(i);
+            }
+        }
+
+        let mut result = Vec::with_capacity(folders.len());
+        while let Some(idx) = queue.pop_front() {
+            result.push(folders[idx].clone());
+            for &child_idx in &children[idx] {
+                in_degree[child_idx] -= 1;
+                if in_degree[child_idx] == 0 {
+                    queue.push_back(child_idx);
+                }
+            }
+        }
+
+        for (i, &deg) in in_degree.iter().enumerate() {
+            if deg > 0 {
+                result.push(folders[i].clone());
+            }
+        }
+
+        result
     }
 
     async fn process_remote_files(&self, files: &[ApiFile], report: &mut SyncReport) -> Result<usize> {
@@ -498,6 +543,35 @@ impl SyncEngine {
         )?;
 
         info!("↑ created folder: {}", name);
+        Ok(())
+    }
+
+    async fn sync_folder_contents(&self, dir: &Path) -> Result<()> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return Ok(()),
+        };
+
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            let relative = self.relative_path(&path);
+
+            if self.ignore.is_ignored(&relative) {
+                continue;
+            }
+
+            if path.is_dir() {
+                self.ensure_remote_folder(&path).await?;
+                Box::pin(self.sync_folder_contents(&path)).await?;
+            } else if path.is_file() {
+                if self.state.get_file(&relative)?.is_some() {
+                    continue;
+                }
+                self.handle_local_file_change(&path).await?;
+            }
+        }
+
         Ok(())
     }
 
