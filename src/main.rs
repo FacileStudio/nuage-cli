@@ -1,5 +1,6 @@
 mod api;
 mod config;
+mod daemon;
 mod hash;
 mod ignore;
 mod sync;
@@ -7,8 +8,6 @@ mod sync;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use tracing::{error, info};
 
 #[derive(Parser)]
@@ -20,37 +19,57 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Start background daemon
+    Start,
+    /// Stop background daemon
+    Stop,
+    /// Restart background daemon
+    Restart,
     /// Run one-time sync
     Sync,
-    /// Start watching for changes (daemon mode)
+    /// Start foreground watcher (for debugging)
     Watch,
-    /// Show sync status
+    /// Show sync and daemon status
     Status,
+    /// Show daemon logs
+    Logs(LogsArgs),
     /// Interactive login setup
     Login,
     /// Upgrade nuage-cli
     Upgrade,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
-        .with_target(false)
-        .with_timer(tracing_subscriber::fmt::time::time())
-        .init();
+#[derive(clap::Args)]
+struct LogsArgs {
+    #[arg(short, long)]
+    follow: bool,
+}
 
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        None | Some(Command::Watch) => cmd_watch().await,
-        Some(Command::Sync) => cmd_sync().await,
-        Some(Command::Status) => cmd_status().await,
-        Some(Command::Login) => cmd_login().await,
-        Some(Command::Upgrade) => cmd_upgrade().await,
+        Some(Command::Start) => cmd_start(),
+        Some(Command::Stop) => cmd_stop(),
+        Some(Command::Restart) => cmd_restart(),
+        Some(Command::Logs(args)) => cmd_logs(args.follow),
+        other => {
+            daemon::init_terminal_logging();
+
+            let rt = tokio::runtime::Runtime::new()
+                .context("failed to create async runtime")?;
+
+            rt.block_on(async {
+                match other {
+                    None | Some(Command::Watch) => cmd_watch().await,
+                    Some(Command::Sync) => cmd_sync().await,
+                    Some(Command::Status) => cmd_status().await,
+                    Some(Command::Login) => cmd_login().await,
+                    Some(Command::Upgrade) => cmd_upgrade().await,
+                    _ => unreachable!(),
+                }
+            })
+        }
     }
 }
 
@@ -68,52 +87,132 @@ fn build_engine() -> Result<sync::SyncEngine> {
     sync::SyncEngine::new(config, api_client, state, ignore)
 }
 
-async fn cmd_sync() -> Result<()> {
-    let engine = build_engine()?;
-
-    println!("[nuage] syncing...");
-    let report = engine.full_sync().await?;
-
-    let total = report.downloaded + report.uploaded + report.deleted_local + report.deleted_remote;
-    println!("[nuage] ✓ sync complete ({} changes)", total);
-
-    if report.conflicts > 0 {
-        println!("[nuage] ⚠ {} conflicts resolved (local copies renamed)", report.conflicts);
+fn cmd_start() -> Result<()> {
+    if let Some(pid) = daemon::is_running()? {
+        println!("[nuage] already running (PID {})", pid);
+        return Ok(());
     }
 
+    config::Config::load().context("fix config before starting daemon")?;
+
+    let log_dir = daemon::log_dir()?;
+    std::fs::create_dir_all(&log_dir)?;
+
+    let log_file = daemon::log_path()?;
+    let stdout = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file)
+        .with_context(|| format!("cannot open log file: {}", log_file.display()))?;
+    let stderr = stdout
+        .try_clone()
+        .context("failed to clone log file handle")?;
+
+    let pid_file = daemon::pid_path()?;
+    let nuage_dir = daemon::nuage_dir()?;
+    std::fs::create_dir_all(&nuage_dir)?;
+
+    println!("[nuage] starting daemon...");
+
+    let daemonize = daemonize::Daemonize::new()
+        .pid_file(&pid_file)
+        .chown_pid_file(true)
+        .stdout(stdout)
+        .stderr(stderr);
+
+    daemonize.start().context("failed to daemonize")?;
+
+    daemon::init_daemon_logging();
+
+    let rt = tokio::runtime::Runtime::new()
+        .context("failed to create async runtime")?;
+
+    rt.block_on(run_daemon())
+}
+
+fn cmd_stop() -> Result<()> {
+    match daemon::is_running()? {
+        Some(pid) => {
+            let kill_result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            if kill_result != 0 {
+                let _ = std::fs::remove_file(daemon::pid_path()?);
+                println!("[nuage] process already gone, cleaned up PID file");
+                return Ok(());
+            }
+
+            for _ in 0..50 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                let alive = unsafe { libc::kill(pid as i32, 0) == 0 };
+                if !alive {
+                    let _ = std::fs::remove_file(daemon::pid_path()?);
+                    println!("[nuage] stopped (was PID {})", pid);
+                    return Ok(());
+                }
+            }
+
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let _ = std::fs::remove_file(daemon::pid_path()?);
+            println!("[nuage] killed (PID {})", pid);
+            Ok(())
+        }
+        None => {
+            println!("[nuage] not running");
+            Ok(())
+        }
+    }
+}
+
+fn cmd_restart() -> Result<()> {
+    cmd_stop()?;
+    cmd_start()
+}
+
+fn cmd_logs(follow: bool) -> Result<()> {
+    let log_file = daemon::log_path()?;
+    if !log_file.exists() {
+        println!("[nuage] no logs yet");
+        return Ok(());
+    }
+
+    let mut args = vec![];
+    if follow {
+        args.extend(["-f", "-n", "50"]);
+    } else {
+        args.extend(["-n", "50"]);
+    }
+    let path_str = log_file.to_string_lossy().to_string();
+    args.push(&path_str);
+
+    let status = std::process::Command::new("tail")
+        .args(&args)
+        .status()
+        .context("failed to run tail")?;
+
+    if !status.success() {
+        bail!("tail exited with error");
+    }
     Ok(())
 }
 
-async fn cmd_watch() -> Result<()> {
-    let engine = build_engine()?;
+async fn sync_loop(engine: &sync::SyncEngine) -> Result<()> {
     let sync_dir = engine.sync_dir().to_path_buf();
     let poll_interval = engine.config().poll_interval;
 
-    println!("[nuage] starting initial sync...");
-    let report = engine.full_sync().await?;
-
-    let file_count = engine.state().file_count().unwrap_or(0);
-    println!("[nuage] watching {} (synced {} files)", sync_dir.display(), file_count);
-
-    if report.conflicts > 0 {
-        println!("[nuage] ⚠ {} conflicts resolved", report.conflicts);
-    }
-
     let watcher = sync::watcher::FsWatcher::new(&sync_dir, engine.ignore_rules())?;
 
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::SeqCst);
-    })
-    .context("failed to set Ctrl+C handler")?;
+    let mut poll_timer =
+        tokio::time::interval(tokio::time::Duration::from_secs(poll_interval));
+    poll_timer.tick().await;
 
-    let mut poll_interval_timer = tokio::time::interval(
-        tokio::time::Duration::from_secs(poll_interval),
-    );
-    poll_interval_timer.tick().await;
+    let mut sigterm =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut sigint =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
 
-    while running.load(Ordering::SeqCst) {
+    loop {
         if let Some(paths) = watcher.try_recv() {
             if let Err(e) = engine.process_local_changes(paths).await {
                 error!("local sync error: {}", e);
@@ -121,37 +220,107 @@ async fn cmd_watch() -> Result<()> {
         }
 
         tokio::select! {
-            _ = poll_interval_timer.tick() => {
+            _ = sigterm.recv() => {
+                info!("shutting down (SIGTERM)");
+                break;
+            }
+            _ = sigint.recv() => {
+                info!("shutting down (SIGINT)");
+                break;
+            }
+            _ = poll_timer.tick() => {
                 match engine.process_remote_changes().await {
                     Ok(report) => {
-                        let total = report.downloaded + report.uploaded + report.deleted_local + report.deleted_remote;
+                        let total = report.downloaded + report.uploaded
+                            + report.deleted_local + report.deleted_remote;
                         if total > 0 {
-                            info!("✓ sync complete ({} changes)", total);
+                            info!("sync ({} changes)", total);
                         }
                     }
-                    Err(e) => {
-                        error!("remote sync error: {}", e);
-                    }
+                    Err(e) => error!("remote sync error: {}", e),
                 }
             }
             _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {}
         }
     }
 
+    Ok(())
+}
+
+async fn run_daemon() -> Result<()> {
+    let engine = build_engine()?;
+
+    info!("daemon started, PID {}", std::process::id());
+
+    let report = engine.full_sync().await?;
+    let file_count = engine.state().file_count().unwrap_or(0);
+    info!("watching {} ({} files synced)", engine.sync_dir().display(), file_count);
+
+    if report.conflicts > 0 {
+        info!("{} conflicts resolved", report.conflicts);
+    }
+
+    sync_loop(&engine).await?;
+
+    let _ = std::fs::remove_file(daemon::pid_path()?);
+    info!("daemon stopped");
+    Ok(())
+}
+
+async fn cmd_watch() -> Result<()> {
+    let engine = build_engine()?;
+
+    println!("[nuage] starting initial sync...");
+    let report = engine.full_sync().await?;
+
+    let file_count = engine.state().file_count().unwrap_or(0);
+    println!(
+        "[nuage] watching {} (synced {} files)",
+        engine.sync_dir().display(),
+        file_count
+    );
+
+    if report.conflicts > 0 {
+        println!("[nuage] {} conflicts resolved", report.conflicts);
+    }
+
+    sync_loop(&engine).await?;
+
     println!("\n[nuage] stopped");
     Ok(())
 }
 
+async fn cmd_sync() -> Result<()> {
+    let engine = build_engine()?;
+
+    println!("[nuage] syncing...");
+    let report = engine.full_sync().await?;
+
+    let total = report.downloaded + report.uploaded + report.deleted_local + report.deleted_remote;
+    println!("[nuage] sync complete ({} changes)", total);
+
+    if report.conflicts > 0 {
+        println!("[nuage] {} conflicts resolved (local copies renamed)", report.conflicts);
+    }
+
+    Ok(())
+}
+
 async fn cmd_status() -> Result<()> {
+    match daemon::is_running()? {
+        Some(pid) => println!("Daemon: running (PID {})", pid),
+        None => println!("Daemon: stopped"),
+    }
+
     let config = config::Config::load()?;
     let sync_dir = config.sync_dir_expanded()?;
 
     if !sync_dir.join(".nuage").join("state.db").exists() {
-        println!("Connected to: {}", config.server_url);
-        println!("Sync directory: {}", sync_dir.display());
+        println!("Server: {}", config.server_url);
+        println!("Sync dir: {}", sync_dir.display());
         println!("Last sync: never");
-        println!("Files tracked: 0");
-        println!("Folders tracked: 0");
+        println!("Files: 0");
+        println!("Folders: 0");
         return Ok(());
     }
 
@@ -160,17 +329,17 @@ async fn cmd_status() -> Result<()> {
     let file_count = state.file_count()?;
     let folder_count = state.folder_count()?;
 
-    println!("Connected to: {}", config.server_url);
-    println!("Sync directory: {}", sync_dir.display());
+    println!("Server: {}", config.server_url);
+    println!("Sync dir: {}", sync_dir.display());
     println!("Last sync: {}", cursor);
-    println!("Files tracked: {}", file_count);
-    println!("Folders tracked: {}", folder_count);
+    println!("Files: {}", file_count);
+    println!("Folders: {}", folder_count);
 
     Ok(())
 }
 
 async fn cmd_login() -> Result<()> {
-    println!("nuage — interactive setup\n");
+    println!("nuage -- interactive setup\n");
 
     let server_url = prompt("Server URL")?;
     if server_url.is_empty() {
@@ -207,18 +376,19 @@ async fn cmd_login() -> Result<()> {
     println!("\nTesting connection...");
     let client = api::ApiClient::new(&server_url, &token);
     client.test_connection().await?;
-    println!("✓ connected successfully");
+    println!("connected successfully");
 
     config.save()?;
-    println!("✓ config saved to ~/.nuage.yml");
+    println!("config saved to ~/.nuage.yml");
 
     let expanded = shellexpand::tilde(&sync_dir);
     let sync_path = std::path::PathBuf::from(expanded.as_ref());
     std::fs::create_dir_all(&sync_path)
         .with_context(|| format!("cannot create sync directory: {}", sync_path.display()))?;
-    println!("✓ sync directory ready: {}", sync_path.display());
+    println!("sync directory ready: {}", sync_path.display());
 
-    println!("\nRun `nuage` to start syncing.");
+    println!("\nRun `nuage start` to start syncing in the background.");
+    println!("Run `nuage watch` for foreground mode.");
     Ok(())
 }
 
