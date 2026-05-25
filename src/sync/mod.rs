@@ -90,10 +90,8 @@ impl SyncEngine {
             }
         }
 
-        if changes.is_full_sync {
-            let upload_result = self.upload_untracked_files().await?;
-            report.uploaded += upload_result;
-        }
+        let upload_result = self.upload_untracked_files().await?;
+        report.uploaded += upload_result;
 
         self.state.set_cursor(&changes.server_time)?;
 

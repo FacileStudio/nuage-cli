@@ -9,7 +9,6 @@ pub struct RemoteChanges {
     pub changed_folders: Vec<ApiFolder>,
     pub deleted_folder_ids: Vec<i64>,
     pub server_time: String,
-    pub is_full_sync: bool,
 }
 
 pub async fn fetch_remote_changes(api: &ApiClient, state: &SyncState) -> Result<RemoteChanges> {
@@ -25,7 +24,6 @@ pub async fn fetch_remote_changes(api: &ApiClient, state: &SyncState) -> Result<
                 changed_folders: resp.folders,
                 deleted_folder_ids: Vec::new(),
                 server_time: resp.server_time,
-                is_full_sync: true,
             })
         }
         Some(since) => {
@@ -37,7 +35,6 @@ pub async fn fetch_remote_changes(api: &ApiClient, state: &SyncState) -> Result<
                 changed_folders: resp.folders.changed,
                 deleted_folder_ids: resp.folders.deleted.iter().map(|d| d.id).collect(),
                 server_time: resp.server_time,
-                is_full_sync: false,
             })
         }
     }
