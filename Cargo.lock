@@ -1150,6 +1150,7 @@ dependencies = [
  "clap",
  "daemonize",
  "dirs 5.0.1",
+ "futures-util",
  "glob-match",
  "indicatif",
  "libc",
@@ -1163,6 +1164,7 @@ dependencies = [
  "sha2",
  "shellexpand",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]

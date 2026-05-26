@@ -26,7 +26,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 glob-match = "0.2"
+futures-util = "0.3"
 indicatif = "0.17"
+tokio-util = { version = "0.7", features = ["io"] }
 daemonize = "0.5"
 libc = "0.2"
 shellexpand = "3"

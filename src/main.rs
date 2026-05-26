@@ -7,12 +7,22 @@ mod sync;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use std::io::{self, Write};
+use futures_util::StreamExt;
+use indicatif::{ProgressBar, ProgressStyle};
+use serde::Serialize;
+use std::io::{self, IsTerminal, Read, Write};
+use std::path::{Path, PathBuf};
 use tracing::{error, info};
+
+use api::{ApiClient, ApiFile, ApiFolder};
+use sync::transfer;
 
 #[derive(Parser)]
 #[command(name = "nuage", about = "File sync daemon for Nuage")]
 struct Cli {
+    #[arg(long, global = true, help = "Output as JSON")]
+    json: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -37,12 +47,133 @@ enum Command {
     Login,
     /// Upgrade nuage-cli
     Upgrade,
+    /// List files and folders at a remote path
+    Ls(LsArgs),
+    /// Upload a file to the server
+    Upload(UploadArgs),
+    /// Download a file from the server
+    Download(DownloadArgs),
+    /// Create a remote folder
+    Mkdir(MkdirArgs),
+    /// Move or rename a file/folder
+    Mv(MvArgs),
+    /// Delete a file or folder
+    Rm(RmArgs),
+    /// Create a share link
+    Share(ShareArgs),
+    /// Revoke a share link
+    Unshare(UnshareArgs),
+    /// List your shares
+    Shares,
+    /// Manage API tokens
+    #[command(subcommand)]
+    Token(TokenCommand),
 }
 
 #[derive(clap::Args)]
 struct LogsArgs {
     #[arg(short, long)]
     follow: bool,
+}
+
+#[derive(clap::Args)]
+struct LsArgs {
+    #[arg(default_value = "/")]
+    path: String,
+    #[arg(short, long, help = "Show sizes and dates")]
+    long: bool,
+}
+
+#[derive(clap::Args)]
+struct UploadArgs {
+    /// Local file path, or "-" to read from stdin
+    source: String,
+    /// Remote destination path
+    #[arg(default_value = "/")]
+    dest: String,
+}
+
+#[derive(clap::Args)]
+struct DownloadArgs {
+    /// Remote file path
+    remote_path: String,
+    /// Local destination (file or directory)
+    #[arg(default_value = ".")]
+    local_dest: String,
+}
+
+#[derive(clap::Args)]
+struct MkdirArgs {
+    /// Remote folder path to create
+    path: String,
+}
+
+#[derive(clap::Args)]
+struct MvArgs {
+    /// Source remote path
+    source: String,
+    /// Destination remote path (new name or parent folder)
+    dest: String,
+}
+
+#[derive(clap::Args)]
+struct RmArgs {
+    /// Remote path to delete
+    path: String,
+    #[arg(short, long, help = "Skip confirmation")]
+    force: bool,
+}
+
+#[derive(clap::Args)]
+struct ShareArgs {
+    /// Remote path to share
+    path: String,
+    #[arg(short, long, default_value = "view", help = "Permission: view or edit")]
+    permission: String,
+    #[arg(short, long, help = "Expiration (RFC3339 or duration like 7d, 24h)")]
+    expires: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct UnshareArgs {
+    /// Share ID to revoke
+    id: i64,
+}
+
+#[derive(Subcommand)]
+enum TokenCommand {
+    /// Create a new API token
+    Create(TokenCreateArgs),
+    /// List API tokens
+    List,
+    /// Revoke an API token
+    Revoke(TokenRevokeArgs),
+}
+
+#[derive(clap::Args)]
+struct TokenCreateArgs {
+    /// Token name
+    #[arg(short, long)]
+    name: String,
+}
+
+#[derive(clap::Args)]
+struct TokenRevokeArgs {
+    /// Token ID to revoke
+    id: i64,
+}
+
+#[derive(Serialize)]
+struct LsEntry {
+    name: String,
+    #[serde(rename = "type")]
+    kind: String,
+    id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mime_type: Option<String>,
+    updated_at: String,
 }
 
 fn main() -> Result<()> {
@@ -66,11 +197,26 @@ fn main() -> Result<()> {
                     Some(Command::Status) => cmd_status().await,
                     Some(Command::Login) => cmd_login().await,
                     Some(Command::Upgrade) => cmd_upgrade().await,
+                    Some(Command::Ls(args)) => cmd_ls(&args, cli.json).await,
+                    Some(Command::Upload(args)) => cmd_upload(&args, cli.json).await,
+                    Some(Command::Download(args)) => cmd_download(&args, cli.json).await,
+                    Some(Command::Mkdir(args)) => cmd_mkdir(&args, cli.json).await,
+                    Some(Command::Mv(args)) => cmd_mv(&args, cli.json).await,
+                    Some(Command::Rm(args)) => cmd_rm(&args, cli.json).await,
+                    Some(Command::Share(args)) => cmd_share(&args, cli.json).await,
+                    Some(Command::Unshare(args)) => cmd_unshare(&args, cli.json).await,
+                    Some(Command::Shares) => cmd_shares(cli.json).await,
+                    Some(Command::Token(sub)) => cmd_token(sub, cli.json).await,
                     _ => unreachable!(),
                 }
             })
         }
     }
+}
+
+fn load_api() -> Result<ApiClient> {
+    let config = config::Config::load()?;
+    Ok(ApiClient::new(&config.server_url, &config.token))
 }
 
 fn build_engine() -> Result<sync::SyncEngine> {
@@ -86,6 +232,577 @@ fn build_engine() -> Result<sync::SyncEngine> {
 
     sync::SyncEngine::new(config, api_client, state, ignore)
 }
+
+fn show_progress(json: bool) -> bool {
+    !json && io::stderr().is_terminal()
+}
+
+fn make_progress_bar(total: u64) -> ProgressBar {
+    let pb = ProgressBar::new(total);
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.green} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    pb
+}
+
+fn parse_expiry(input: &str) -> Result<String> {
+    let trimmed = input.trim();
+
+    if trimmed.contains('T') || trimmed.contains('-') {
+        return Ok(trimmed.to_string());
+    }
+
+    let (num_str, unit) = trimmed.split_at(trimmed.len() - 1);
+    let num: u64 = num_str.parse().context("invalid duration number")?;
+
+    let seconds = match unit {
+        "m" => num * 60,
+        "h" => num * 3600,
+        "d" => num * 86400,
+        "w" => num * 604800,
+        _ => bail!("unknown duration unit: {} (use m, h, d, or w)", unit),
+    };
+
+    let expires = chrono::Utc::now() + chrono::Duration::seconds(seconds as i64);
+    Ok(expires.to_rfc3339())
+}
+
+// --- Path resolution ---
+
+enum ResolvedPath {
+    Root,
+    Folder(ApiFolder),
+    File(ApiFile),
+}
+
+async fn resolve_path(api: &ApiClient, path: &str) -> Result<ResolvedPath> {
+    let parts: Vec<&str> = path
+        .trim_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if parts.is_empty() {
+        return Ok(ResolvedPath::Root);
+    }
+
+    let all_folders = api.list_folders().await?;
+
+    let mut current_folder: Option<&ApiFolder> = None;
+
+    for (i, part) in parts.iter().enumerate() {
+        let parent_id = current_folder.map(|f| f.id);
+        let matching = all_folders
+            .iter()
+            .find(|f| f.name == *part && f.parent_id == parent_id);
+
+        if let Some(folder) = matching {
+            if i == parts.len() - 1 {
+                return Ok(ResolvedPath::Folder(folder.clone()));
+            }
+            current_folder = Some(folder);
+        } else if i == parts.len() - 1 {
+            let files = api.list_files(parent_id).await?;
+            let all_files: Vec<&ApiFile> = if parent_id.is_some() {
+                files.iter().collect()
+            } else {
+                files.iter().filter(|f| f.folder_id.is_none()).collect()
+            };
+            if let Some(file) = all_files.iter().find(|f| f.name == *part) {
+                return Ok(ResolvedPath::File((*file).clone()));
+            }
+            bail!("not found: {}", path);
+        } else {
+            bail!("folder not found: {}", *part);
+        }
+    }
+
+    unreachable!()
+}
+
+fn resolve_parent_and_name(path: &str) -> (&str, &str) {
+    let trimmed = path.trim_end_matches('/');
+    match trimmed.rfind('/') {
+        Some(pos) => {
+            let parent = &trimmed[..pos];
+            let name = &trimmed[pos + 1..];
+            if parent.is_empty() {
+                ("/", name)
+            } else {
+                (parent, name)
+            }
+        }
+        None => ("/", trimmed),
+    }
+}
+
+async fn resolve_folder_id(api: &ApiClient, path: &str) -> Result<Option<i64>> {
+    match resolve_path(api, path).await? {
+        ResolvedPath::Root => Ok(None),
+        ResolvedPath::Folder(f) => Ok(Some(f.id)),
+        ResolvedPath::File(_) => bail!("{} is a file, not a folder", path),
+    }
+}
+
+// --- File management commands ---
+
+async fn cmd_ls(args: &LsArgs, json: bool) -> Result<()> {
+    let api = load_api()?;
+
+    let mut entries: Vec<LsEntry> = Vec::new();
+
+    match resolve_path(&api, &args.path).await? {
+        ResolvedPath::Root => {
+            let all_folders = api.list_folders().await?;
+            for f in all_folders.iter().filter(|f| f.parent_id.is_none()) {
+                entries.push(LsEntry {
+                    name: f.name.clone(),
+                    kind: "folder".into(),
+                    id: f.id,
+                    size: None,
+                    mime_type: None,
+                    updated_at: f.updated_at.clone(),
+                });
+            }
+            let all_files = api.list_files(None).await?;
+            for f in all_files.iter().filter(|f| f.folder_id.is_none()) {
+                entries.push(LsEntry {
+                    name: f.name.clone(),
+                    kind: "file".into(),
+                    id: f.id,
+                    size: f.size,
+                    mime_type: f.mime_type.clone(),
+                    updated_at: f.updated_at.clone(),
+                });
+            }
+        }
+        ResolvedPath::Folder(folder) => {
+            let detail = api.get_folder(folder.id).await?;
+            for f in &detail.folders {
+                entries.push(LsEntry {
+                    name: f.name.clone(),
+                    kind: "folder".into(),
+                    id: f.id,
+                    size: None,
+                    mime_type: None,
+                    updated_at: f.updated_at.clone(),
+                });
+            }
+            for f in &detail.files {
+                entries.push(LsEntry {
+                    name: f.name.clone(),
+                    kind: "file".into(),
+                    id: f.id,
+                    size: f.size,
+                    mime_type: f.mime_type.clone(),
+                    updated_at: f.updated_at.clone(),
+                });
+            }
+        }
+        ResolvedPath::File(file) => {
+            entries.push(LsEntry {
+                name: file.name.clone(),
+                kind: "file".into(),
+                id: file.id,
+                size: file.size,
+                mime_type: file.mime_type.clone(),
+                updated_at: file.updated_at.clone(),
+            });
+        }
+    }
+
+    if json {
+        println!("{}", serde_json::to_string(&entries)?);
+        return Ok(());
+    }
+
+    entries.sort_by(|a, b| {
+        let type_ord = if a.kind == "folder" { 0 } else { 1 };
+        let type_ord_b = if b.kind == "folder" { 0 } else { 1 };
+        type_ord.cmp(&type_ord_b).then(a.name.cmp(&b.name))
+    });
+
+    for entry in &entries {
+        if args.long {
+            let size_str = if entry.kind == "folder" {
+                "   <dir>".to_string()
+            } else {
+                format!("{:>8}", entry.size.map(|s| transfer::format_size(s as u64)).unwrap_or_else(|| "--".into()))
+            };
+            let date = &entry.updated_at[..10];
+            let display_name = if entry.kind == "folder" {
+                format!("{}/", entry.name)
+            } else {
+                entry.name.clone()
+            };
+            println!("{}  {}  {}", size_str, date, display_name);
+        } else {
+            if entry.kind == "folder" {
+                println!("{}/", entry.name);
+            } else {
+                println!("{}", entry.name);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn cmd_upload(args: &UploadArgs, json: bool) -> Result<()> {
+    let api = load_api()?;
+
+    let (parent_path, dest_name) = resolve_parent_and_name(&args.dest);
+    let folder_id = resolve_folder_id(&api, parent_path).await?;
+
+    let data = if args.source == "-" {
+        if io::stdin().is_terminal() {
+            bail!("stdin is a terminal -- pipe data or use a file path");
+        }
+        let mut buf = Vec::new();
+        io::stdin().read_to_end(&mut buf)?;
+        buf
+    } else {
+        let path = Path::new(&args.source);
+        if !path.exists() {
+            bail!("file not found: {}", args.source);
+        }
+        std::fs::read(path).with_context(|| format!("cannot read: {}", args.source))?
+    };
+
+    let file_name = if dest_name.is_empty() || dest_name == "/" {
+        if args.source == "-" {
+            "stdin".to_string()
+        } else {
+            Path::new(&args.source)
+                .file_name()
+                .context("source has no filename")?
+                .to_string_lossy()
+                .to_string()
+        }
+    } else {
+        dest_name.to_string()
+    };
+
+    let mime = if args.source == "-" {
+        "application/octet-stream".to_string()
+    } else {
+        transfer::mime_from_extension(Path::new(&args.source))
+    };
+
+    let result = api.upload_file(&file_name, &mime, folder_id, data).await?;
+
+    if json {
+        println!("{}", serde_json::to_string(&result)?);
+    } else {
+        let size = result.size.map(|s| transfer::format_size(s as u64)).unwrap_or_default();
+        println!("uploaded {} ({})", result.name, size);
+    }
+
+    Ok(())
+}
+
+async fn cmd_download(args: &DownloadArgs, json: bool) -> Result<()> {
+    let api = load_api()?;
+
+    let file = match resolve_path(&api, &args.remote_path).await? {
+        ResolvedPath::File(f) => f,
+        ResolvedPath::Folder(_) => bail!("{} is a folder, not a file", args.remote_path),
+        ResolvedPath::Root => bail!("cannot download root"),
+    };
+
+    let mut local_path = PathBuf::from(&args.local_dest);
+    if local_path.is_dir() {
+        local_path = local_path.join(&file.name);
+    }
+
+    let resp = api.download_file_stream(file.id).await?;
+    let total = resp.content_length().unwrap_or(file.size.unwrap_or(0) as u64);
+
+    let use_progress = show_progress(json) && total > 1024 * 100;
+
+    let pb = if use_progress {
+        Some(make_progress_bar(total))
+    } else {
+        None
+    };
+
+    if let Some(parent) = local_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let tmp_path = local_path.with_extension("nuage-tmp");
+    let mut out = std::fs::File::create(&tmp_path)
+        .with_context(|| format!("cannot create: {}", tmp_path.display()))?;
+
+    let mut stream = resp.bytes_stream();
+    let mut downloaded: u64 = 0;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("download stream error")?;
+        out.write_all(&chunk)?;
+        downloaded += chunk.len() as u64;
+        if let Some(ref pb) = pb {
+            pb.inc(chunk.len() as u64);
+        }
+    }
+
+    drop(out);
+    std::fs::rename(&tmp_path, &local_path)?;
+
+    if let Some(pb) = pb {
+        pb.finish_and_clear();
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "name": file.name,
+                "size": downloaded,
+                "path": local_path.to_string_lossy(),
+            }))?
+        );
+    } else {
+        println!(
+            "downloaded {} ({}) -> {}",
+            file.name,
+            transfer::format_size(downloaded),
+            local_path.display()
+        );
+    }
+
+    Ok(())
+}
+
+async fn cmd_mkdir(args: &MkdirArgs, json: bool) -> Result<()> {
+    let api = load_api()?;
+
+    let (parent_path, folder_name) = resolve_parent_and_name(&args.path);
+    if folder_name.is_empty() {
+        bail!("folder name cannot be empty");
+    }
+
+    let parent_id = resolve_folder_id(&api, parent_path).await?;
+    let folder = api.create_folder(folder_name, parent_id).await?;
+
+    if json {
+        println!("{}", serde_json::to_string(&folder)?);
+    } else {
+        println!("created {}/", args.path.trim_end_matches('/'));
+    }
+
+    Ok(())
+}
+
+async fn cmd_mv(args: &MvArgs, json: bool) -> Result<()> {
+    let api = load_api()?;
+
+    let resolved = resolve_path(&api, &args.source).await?;
+
+    let (dest_parent, dest_name) = resolve_parent_and_name(&args.dest);
+    let dest_folder_id = resolve_folder_id(&api, dest_parent).await?;
+
+    match resolved {
+        ResolvedPath::File(file) => {
+            let new_name = if dest_name.is_empty() { None } else { Some(dest_name) };
+            let folder_arg = Some(dest_folder_id);
+            let result = api.update_file(file.id, new_name, folder_arg).await?;
+            if json {
+                println!("{}", serde_json::to_string(&result)?);
+            } else {
+                println!("moved {} -> {}", file.name, args.dest);
+            }
+        }
+        ResolvedPath::Folder(folder) => {
+            let new_name = if dest_name.is_empty() { None } else { Some(dest_name) };
+            let parent_arg = Some(dest_folder_id);
+            let result = api.update_folder(folder.id, new_name, parent_arg).await?;
+            if json {
+                println!("{}", serde_json::to_string(&result)?);
+            } else {
+                println!("moved {}/ -> {}", folder.name, args.dest);
+            }
+        }
+        ResolvedPath::Root => bail!("cannot move root"),
+    }
+
+    Ok(())
+}
+
+async fn cmd_rm(args: &RmArgs, json: bool) -> Result<()> {
+    let api = load_api()?;
+
+    let resolved = resolve_path(&api, &args.path).await?;
+
+    match resolved {
+        ResolvedPath::File(file) => {
+            if !args.force && !json {
+                print!("delete {}? [y/N] ", file.name);
+                io::stdout().flush()?;
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    println!("cancelled");
+                    return Ok(());
+                }
+            }
+            api.delete_file(file.id).await?;
+            if json {
+                println!("{}", serde_json::json!({"deleted": true, "name": file.name}));
+            } else {
+                println!("deleted {}", file.name);
+            }
+        }
+        ResolvedPath::Folder(folder) => {
+            if !args.force && !json {
+                print!("delete {}/? [y/N] ", folder.name);
+                io::stdout().flush()?;
+                let mut input = String::new();
+                io::stdin().read_line(&mut input)?;
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    println!("cancelled");
+                    return Ok(());
+                }
+            }
+            api.delete_folder(folder.id).await?;
+            if json {
+                println!("{}", serde_json::json!({"deleted": true, "name": folder.name}));
+            } else {
+                println!("deleted {}/", folder.name);
+            }
+        }
+        ResolvedPath::Root => bail!("cannot delete root"),
+    }
+
+    Ok(())
+}
+
+// --- Share commands ---
+
+async fn cmd_share(args: &ShareArgs, json: bool) -> Result<()> {
+    let api = load_api()?;
+    let config = config::Config::load()?;
+
+    let resolved = resolve_path(&api, &args.path).await?;
+
+    let (file_id, folder_id) = match &resolved {
+        ResolvedPath::File(f) => (Some(f.id), None),
+        ResolvedPath::Folder(f) => (None, Some(f.id)),
+        ResolvedPath::Root => bail!("cannot share root"),
+    };
+
+    let expires_at = args.expires.as_deref().map(parse_expiry).transpose()?;
+    let share = api
+        .create_share(file_id, folder_id, &args.permission, expires_at.as_deref())
+        .await?;
+
+    if json {
+        println!("{}", serde_json::to_string(&share)?);
+    } else {
+        let url = format!("{}/s/{}", config.server_url.trim_end_matches('/'), share.token);
+        println!("{}", url);
+        if let Some(ref exp) = share.expires_at {
+            println!("expires: {}", exp);
+        }
+    }
+
+    Ok(())
+}
+
+async fn cmd_unshare(args: &UnshareArgs, json: bool) -> Result<()> {
+    let api = load_api()?;
+    api.delete_share(args.id).await?;
+
+    if json {
+        println!("{}", serde_json::json!({"deleted": true, "id": args.id}));
+    } else {
+        println!("share {} revoked", args.id);
+    }
+
+    Ok(())
+}
+
+async fn cmd_shares(json: bool) -> Result<()> {
+    let api = load_api()?;
+    let shares = api.list_shares().await?;
+
+    if json {
+        println!("{}", serde_json::to_string(&shares)?);
+        return Ok(());
+    }
+
+    if shares.is_empty() {
+        println!("no active shares");
+        return Ok(());
+    }
+
+    for share in &shares {
+        let target = if share.file_id.is_some() {
+            "file"
+        } else {
+            "folder"
+        };
+        let target_id = share.file_id.or(share.folder_id).unwrap_or(0);
+        let exp = share
+            .expires_at
+            .as_deref()
+            .unwrap_or("never");
+        println!(
+            "#{:<4}  {}  {} {}  perm={}  expires={}",
+            share.id, share.token, target, target_id, share.permission, exp
+        );
+    }
+
+    Ok(())
+}
+
+// --- Token commands ---
+
+async fn cmd_token(sub: TokenCommand, json: bool) -> Result<()> {
+    let api = load_api()?;
+
+    match sub {
+        TokenCommand::Create(args) => {
+            let token = api.create_token(&args.name).await?;
+            if json {
+                println!("{}", serde_json::to_string(&token)?);
+            } else {
+                println!("id:    {}", token.id);
+                println!("name:  {}", token.name);
+                if let Some(ref val) = token.token {
+                    println!("token: {}", val);
+                    println!("\nsave this token -- it won't be shown again.");
+                }
+            }
+        }
+        TokenCommand::List => {
+            let tokens = api.list_tokens().await?;
+            if json {
+                println!("{}", serde_json::to_string(&tokens)?);
+            } else if tokens.is_empty() {
+                println!("no API tokens");
+            } else {
+                for t in &tokens {
+                    println!("#{:<4}  {}  created {}", t.id, t.name, &t.created_at[..10]);
+                }
+            }
+        }
+        TokenCommand::Revoke(args) => {
+            api.delete_token(args.id).await?;
+            if json {
+                println!("{}", serde_json::json!({"deleted": true, "id": args.id}));
+            } else {
+                println!("token {} revoked", args.id);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// --- Sync commands (unchanged) ---
 
 fn cmd_start() -> Result<()> {
     if let Some(pid) = daemon::is_running()? {
@@ -333,6 +1050,10 @@ async fn cmd_status() -> Result<()> {
     println!("Files: {}", file_count);
     println!("Folders: {}", folder_count);
 
+    if !config.selective_sync.is_empty() {
+        println!("Selective sync: {}", config.selective_sync.join(", "));
+    }
+
     Ok(())
 }
 
@@ -369,6 +1090,7 @@ async fn cmd_login() -> Result<()> {
             "Thumbs.db".to_string(),
             ".git/".to_string(),
         ],
+        selective_sync: vec![],
     };
 
     println!("\nTesting connection...");

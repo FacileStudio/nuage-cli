@@ -72,7 +72,39 @@ impl SyncEngine {
 
         let changes = remote::fetch_remote_changes(&self.api, &self.state).await?;
 
-        report.folders_created += self.process_remote_folders(&changes.changed_folders).await?;
+        let (folders_to_sync, files_to_sync) = if self.config.selective_sync.is_empty() {
+            (changes.changed_folders, changes.changed_files)
+        } else {
+            let folder_paths = Self::build_folder_paths(&changes.changed_folders);
+            let filtered_folders: Vec<ApiFolder> = changes
+                .changed_folders
+                .into_iter()
+                .filter(|f| {
+                    let path = folder_paths.get(&f.id).map(|s| s.as_str()).unwrap_or("");
+                    Self::matches_selective_sync(path, &self.config.selective_sync)
+                })
+                .collect();
+            let filtered_files: Vec<ApiFile> = changes
+                .changed_files
+                .into_iter()
+                .filter(|f| {
+                    let parent_path = f
+                        .folder_id
+                        .and_then(|fid| folder_paths.get(&fid))
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+                    let file_path = if parent_path.is_empty() {
+                        format!("/{}", f.name)
+                    } else {
+                        format!("{}/{}", parent_path, f.name)
+                    };
+                    Self::matches_selective_sync(&file_path, &self.config.selective_sync)
+                })
+                .collect();
+            (filtered_folders, filtered_files)
+        };
+
+        report.folders_created += self.process_remote_folders(&folders_to_sync).await?;
 
         for folder_id in &changes.deleted_folder_ids {
             self.handle_deleted_remote_folder(*folder_id)?;
@@ -80,7 +112,7 @@ impl SyncEngine {
         }
 
         let download_result = self
-            .process_remote_files(&changes.changed_files, &mut report)
+            .process_remote_files(&files_to_sync, &mut report)
             .await?;
         report.downloaded += download_result;
 
@@ -96,6 +128,36 @@ impl SyncEngine {
         self.state.set_cursor(&changes.server_time)?;
 
         Ok(report)
+    }
+
+    fn build_folder_paths(folders: &[ApiFolder]) -> std::collections::HashMap<i64, String> {
+        let mut paths: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+        let by_id: std::collections::HashMap<i64, &ApiFolder> =
+            folders.iter().map(|f| (f.id, f)).collect();
+
+        for folder in folders {
+            let mut parts = vec![folder.name.clone()];
+            let mut current = folder;
+            while let Some(pid) = current.parent_id {
+                if let Some(parent) = by_id.get(&pid) {
+                    parts.push(parent.name.clone());
+                    current = parent;
+                } else {
+                    break;
+                }
+            }
+            parts.reverse();
+            paths.insert(folder.id, format!("/{}", parts.join("/")));
+        }
+
+        paths
+    }
+
+    fn matches_selective_sync(path: &str, selected: &[String]) -> bool {
+        selected.iter().any(|s| {
+            let s = s.trim_end_matches('/');
+            path == s || path.starts_with(&format!("{}/", s)) || s.starts_with(path)
+        })
     }
 
     pub async fn process_local_changes(&self, paths: Vec<PathBuf>) -> Result<()> {
@@ -408,6 +470,13 @@ impl SyncEngine {
         let local_files = self.scan_local_files()?;
 
         for (relative, full_path) in local_files {
+            if !self.config.selective_sync.is_empty() {
+                let check_path = format!("/{}", relative);
+                if !Self::matches_selective_sync(&check_path, &self.config.selective_sync) {
+                    continue;
+                }
+            }
+
             if self.state.get_file(&relative)?.is_some() {
                 continue;
             }

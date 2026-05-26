@@ -46,7 +46,7 @@ pub async fn upload(
     api.upload_file(&name, &mime, folder_id, data).await
 }
 
-fn mime_from_extension(path: &Path) -> String {
+pub fn mime_from_extension(path: &Path) -> String {
     let ext = path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())

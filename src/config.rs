@@ -20,6 +20,8 @@ pub struct Config {
     pub poll_interval: u64,
     #[serde(default)]
     pub ignore_patterns: Vec<String>,
+    #[serde(default)]
+    pub selective_sync: Vec<String>,
 }
 
 impl Config {
