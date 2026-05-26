@@ -100,6 +100,26 @@ pub struct TokensListResponse {
     pub tokens: Vec<ApiToken>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResultItem {
+    pub id: i64,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub path: String,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub size: Option<i64>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchApiResponse {
+    pub results: Vec<SearchResultItem>,
+    pub total: i32,
+}
+
 pub struct ApiClient {
     base_url: String,
     token: String,
@@ -504,6 +524,43 @@ impl ApiClient {
         }
 
         Ok(())
+    }
+
+    pub async fn search(
+        &self,
+        query: &str,
+        filter_type: Option<&str>,
+        folder_id: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<SearchResultItem>> {
+        let mut params = vec![
+            ("q".to_string(), query.to_string()),
+            ("limit".to_string(), limit.to_string()),
+        ];
+        if let Some(t) = filter_type {
+            params.push(("type".to_string(), t.to_string()));
+        }
+        if let Some(fid) = folder_id {
+            params.push(("folder_id".to_string(), fid.to_string()));
+        }
+
+        let resp = self
+            .client
+            .get(format!("{}/search", self.base_url))
+            .query(&params)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("failed to search")?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GET /search failed ({}): {}", status, body);
+        }
+
+        let api_resp: SearchApiResponse = resp.json().await.context("failed to parse search response")?;
+        Ok(api_resp.results)
     }
 
     pub async fn list_tokens(&self) -> Result<Vec<ApiToken>> {
