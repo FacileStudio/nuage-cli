@@ -56,11 +56,6 @@ pub struct DeletedItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FilesListResponse {
-    pub files: Vec<ApiFile>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FoldersListResponse {
     pub folders: Vec<ApiFolder>,
 }
@@ -378,28 +373,6 @@ impl ApiClient {
     pub async fn test_connection(&self) -> Result<()> {
         self.sync_state().await?;
         Ok(())
-    }
-
-    pub async fn list_files(&self, folder_id: Option<i64>) -> Result<Vec<ApiFile>> {
-        let mut req = self
-            .client
-            .get(format!("{}/files", self.base_url))
-            .bearer_auth(&self.token);
-
-        if let Some(fid) = folder_id {
-            req = req.query(&[("folder_id", fid.to_string())]);
-        }
-
-        let resp = req.send().await.context("failed to list files")?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("GET /files failed ({}): {}", status, body);
-        }
-
-        let list: FilesListResponse = resp.json().await.context("failed to parse files list")?;
-        Ok(list.files)
     }
 
     pub async fn list_folders(&self) -> Result<Vec<ApiFolder>> {

@@ -288,30 +288,37 @@ async fn resolve_path(api: &ApiClient, path: &str) -> Result<ResolvedPath> {
         return Ok(ResolvedPath::Root);
     }
 
-    let all_folders = api.list_folders().await?;
+    let root_folders = api.list_folders().await?;
 
-    let mut current_folder: Option<&ApiFolder> = None;
+    let first = parts[0];
+    let root_match = root_folders.iter().find(|f| f.name == first);
 
-    for (i, part) in parts.iter().enumerate() {
-        let parent_id = current_folder.map(|f| f.id);
-        let matching = all_folders
-            .iter()
-            .find(|f| f.name == *part && f.parent_id == parent_id);
+    if parts.len() == 1 {
+        if let Some(folder) = root_match {
+            return Ok(ResolvedPath::Folder(folder.clone()));
+        }
+        let state = api.sync_state().await?;
+        if let Some(file) = state.files.iter().find(|f| f.name == first && f.folder_id.is_none()) {
+            return Ok(ResolvedPath::File(file.clone()));
+        }
+        bail!("not found: {}", path);
+    }
 
-        if let Some(folder) = matching {
-            if i == parts.len() - 1 {
+    let root_folder = root_match.ok_or_else(|| anyhow::anyhow!("folder not found: {}", first))?;
+    let mut current_id = root_folder.id;
+
+    for (i, part) in parts[1..].iter().enumerate() {
+        let is_last = i == parts.len() - 2;
+        let detail = api.get_folder(current_id).await?;
+
+        if let Some(folder) = detail.folders.iter().find(|f| f.name == *part) {
+            if is_last {
                 return Ok(ResolvedPath::Folder(folder.clone()));
             }
-            current_folder = Some(folder);
-        } else if i == parts.len() - 1 {
-            let files = api.list_files(parent_id).await?;
-            let all_files: Vec<&ApiFile> = if parent_id.is_some() {
-                files.iter().collect()
-            } else {
-                files.iter().filter(|f| f.folder_id.is_none()).collect()
-            };
-            if let Some(file) = all_files.iter().find(|f| f.name == *part) {
-                return Ok(ResolvedPath::File((*file).clone()));
+            current_id = folder.id;
+        } else if is_last {
+            if let Some(file) = detail.files.iter().find(|f| f.name == *part) {
+                return Ok(ResolvedPath::File(file.clone()));
             }
             bail!("not found: {}", path);
         } else {
@@ -355,8 +362,8 @@ async fn cmd_ls(args: &LsArgs, json: bool) -> Result<()> {
 
     match resolve_path(&api, &args.path).await? {
         ResolvedPath::Root => {
-            let all_folders = api.list_folders().await?;
-            for f in all_folders.iter().filter(|f| f.parent_id.is_none()) {
+            let state = api.sync_state().await?;
+            for f in state.folders.iter().filter(|f| f.parent_id.is_none()) {
                 entries.push(LsEntry {
                     name: f.name.clone(),
                     kind: "folder".into(),
@@ -366,8 +373,7 @@ async fn cmd_ls(args: &LsArgs, json: bool) -> Result<()> {
                     updated_at: f.updated_at.clone(),
                 });
             }
-            let all_files = api.list_files(None).await?;
-            for f in all_files.iter().filter(|f| f.folder_id.is_none()) {
+            for f in state.files.iter().filter(|f| f.folder_id.is_none()) {
                 entries.push(LsEntry {
                     name: f.name.clone(),
                     kind: "file".into(),
