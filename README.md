@@ -27,3 +27,8 @@ nuage          # start daemon (watch + sync)
 nuage sync     # one-time sync
 nuage status   # show sync status
 ```
+
+## AI agent integration
+
+`install.sh` auto-registers nuage as an AI agent skill for Claude Code and Codex.
+After installation, AI coding assistants can use nuage commands directly when you ask about file sync, uploads, or shares.
