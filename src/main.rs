@@ -1,4 +1,5 @@
 mod api;
+mod ui;
 mod config;
 mod daemon;
 mod hash;
@@ -18,10 +19,17 @@ use api::{ApiClient, ApiFile, ApiFolder};
 use sync::transfer;
 
 #[derive(Parser)]
-#[command(name = "nuage", about = "File sync daemon for Nuage")]
+#[command(
+    name = "nuage",
+    version,
+    about = "File sync daemon and client for Nuage"
+)]
 struct Cli {
     #[arg(long, global = true, help = "Output as JSON")]
     json: bool,
+
+    #[arg(long, global = true, help = "Disable colored output")]
+    no_color: bool,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -190,8 +198,19 @@ struct LsEntry {
     updated_at: String,
 }
 
-fn main() -> Result<()> {
+fn main() {
     let cli = Cli::parse();
+    if cli.no_color || cli.json {
+        ui::disable_color();
+    }
+
+    if let Err(e) = run(cli) {
+        ui::error(&format!("{e:#}"));
+        std::process::exit(1);
+    }
+}
+
+fn run(cli: Cli) -> Result<()> {
 
     match cli.command {
         Some(Command::Start) => cmd_start(),
@@ -231,7 +250,7 @@ fn main() -> Result<()> {
 
 fn load_api() -> Result<ApiClient> {
     let config = config::Config::load()?;
-    Ok(ApiClient::new(&config.server_url, &config.token))
+    ApiClient::new(&config.server_url, &config.token)
 }
 
 fn build_engine() -> Result<sync::SyncEngine> {
@@ -241,7 +260,7 @@ fn build_engine() -> Result<sync::SyncEngine> {
     std::fs::create_dir_all(&sync_dir)
         .with_context(|| format!("cannot create sync directory: {}", sync_dir.display()))?;
 
-    let api_client = api::ApiClient::new(&config.server_url, &config.token);
+    let api_client = api::ApiClient::new(&config.server_url, &config.token)?;
     let state = sync::state::SyncState::new(&sync_dir)?;
     let ignore = ignore::IgnoreRules::new(config.ignore_patterns.clone());
 
@@ -518,7 +537,7 @@ async fn cmd_upload(args: &UploadArgs, json: bool) -> Result<()> {
         println!("{}", serde_json::to_string(&result)?);
     } else {
         let size = result.size.map(|s| transfer::format_size(s as u64)).unwrap_or_default();
-        println!("uploaded {} ({})", result.name, size);
+        ui::success(&format!("Uploaded {} ({})", result.name, size));
     }
 
     Ok(())
@@ -611,7 +630,7 @@ async fn cmd_mkdir(args: &MkdirArgs, json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string(&folder)?);
     } else {
-        println!("created {}/", args.path.trim_end_matches('/'));
+        ui::success(&format!("Created {}/", args.path.trim_end_matches('/')));
     }
 
     Ok(())
@@ -633,7 +652,7 @@ async fn cmd_mv(args: &MvArgs, json: bool) -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string(&result)?);
             } else {
-                println!("moved {} -> {}", file.name, args.dest);
+                ui::success(&format!("Moved {} → {}", file.name, args.dest));
             }
         }
         ResolvedPath::Folder(folder) => {
@@ -643,7 +662,7 @@ async fn cmd_mv(args: &MvArgs, json: bool) -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string(&result)?);
             } else {
-                println!("moved {}/ -> {}", folder.name, args.dest);
+                ui::success(&format!("Moved {}/ → {}", folder.name, args.dest));
             }
         }
         ResolvedPath::Root => bail!("cannot move root"),
@@ -665,7 +684,7 @@ async fn cmd_rm(args: &RmArgs, json: bool) -> Result<()> {
                 let mut input = String::new();
                 io::stdin().read_line(&mut input)?;
                 if !input.trim().eq_ignore_ascii_case("y") {
-                    println!("cancelled");
+                    ui::step("Cancelled");
                     return Ok(());
                 }
             }
@@ -673,7 +692,7 @@ async fn cmd_rm(args: &RmArgs, json: bool) -> Result<()> {
             if json {
                 println!("{}", serde_json::json!({"deleted": true, "name": file.name}));
             } else {
-                println!("deleted {}", file.name);
+                ui::success(&format!("Deleted {}", file.name));
             }
         }
         ResolvedPath::Folder(folder) => {
@@ -683,7 +702,7 @@ async fn cmd_rm(args: &RmArgs, json: bool) -> Result<()> {
                 let mut input = String::new();
                 io::stdin().read_line(&mut input)?;
                 if !input.trim().eq_ignore_ascii_case("y") {
-                    println!("cancelled");
+                    ui::step("Cancelled");
                     return Ok(());
                 }
             }
@@ -691,7 +710,7 @@ async fn cmd_rm(args: &RmArgs, json: bool) -> Result<()> {
             if json {
                 println!("{}", serde_json::json!({"deleted": true, "name": folder.name}));
             } else {
-                println!("deleted {}/", folder.name);
+                ui::success(&format!("Deleted {}/", folder.name));
             }
         }
         ResolvedPath::Root => bail!("cannot delete root"),
@@ -720,7 +739,7 @@ async fn cmd_search(args: &SearchArgs, json: bool) -> Result<()> {
     }
 
     if results.is_empty() {
-        println!("no results");
+        ui::step("No results");
         return Ok(());
     }
 
@@ -791,7 +810,7 @@ async fn cmd_unshare(args: &UnshareArgs, json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::json!({"deleted": true, "id": args.id}));
     } else {
-        println!("share {} revoked", args.id);
+        ui::success(&format!("Share {} revoked", args.id));
     }
 
     Ok(())
@@ -807,7 +826,7 @@ async fn cmd_shares(json: bool) -> Result<()> {
     }
 
     if shares.is_empty() {
-        println!("no active shares");
+        ui::step("No active shares");
         return Ok(());
     }
 
@@ -855,7 +874,7 @@ async fn cmd_token(sub: TokenCommand, json: bool) -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string(&tokens)?);
             } else if tokens.is_empty() {
-                println!("no API tokens");
+                ui::step("No API tokens");
             } else {
                 for t in &tokens {
                     println!("#{:<4}  {}  created {}", t.id, t.name, &t.created_at[..10]);
@@ -867,7 +886,7 @@ async fn cmd_token(sub: TokenCommand, json: bool) -> Result<()> {
             if json {
                 println!("{}", serde_json::json!({"deleted": true, "id": args.id}));
             } else {
-                println!("token {} revoked", args.id);
+                ui::success(&format!("Token {} revoked", args.id));
             }
         }
     }
@@ -879,7 +898,7 @@ async fn cmd_token(sub: TokenCommand, json: bool) -> Result<()> {
 
 fn cmd_start() -> Result<()> {
     if let Some(pid) = daemon::is_running()? {
-        println!("[nuage] already running (PID {})", pid);
+        ui::warn(&format!("Already running (PID {})", pid));
         return Ok(());
     }
 
@@ -900,7 +919,7 @@ fn cmd_start() -> Result<()> {
 
     let pid_file = daemon::pid_path()?;
 
-    println!("[nuage] starting daemon...");
+    ui::step("Starting daemon");
 
     let daemonize = daemonize::Daemonize::new()
         .pid_file(&pid_file)
@@ -924,7 +943,7 @@ fn cmd_stop() -> Result<()> {
             let kill_result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
             if kill_result != 0 {
                 let _ = std::fs::remove_file(daemon::pid_path()?);
-                println!("[nuage] process already gone, cleaned up PID file");
+                ui::warn("Process already gone, cleaned up PID file");
                 return Ok(());
             }
 
@@ -933,7 +952,7 @@ fn cmd_stop() -> Result<()> {
                 let alive = unsafe { libc::kill(pid as i32, 0) == 0 };
                 if !alive {
                     let _ = std::fs::remove_file(daemon::pid_path()?);
-                    println!("[nuage] stopped (was PID {})", pid);
+                    ui::success(&format!("Stopped (was PID {})", pid));
                     return Ok(());
                 }
             }
@@ -943,11 +962,11 @@ fn cmd_stop() -> Result<()> {
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
             let _ = std::fs::remove_file(daemon::pid_path()?);
-            println!("[nuage] killed (PID {})", pid);
+            ui::success(&format!("Killed (PID {})", pid));
             Ok(())
         }
         None => {
-            println!("[nuage] not running");
+            ui::warn("Not running");
             Ok(())
         }
     }
@@ -961,7 +980,7 @@ fn cmd_restart() -> Result<()> {
 fn cmd_logs(follow: bool) -> Result<()> {
     let log_file = daemon::log_path()?;
     if !log_file.exists() {
-        println!("[nuage] no logs yet");
+        ui::step("No logs yet");
         return Ok(());
     }
 
@@ -1058,7 +1077,7 @@ async fn run_daemon() -> Result<()> {
 async fn cmd_watch() -> Result<()> {
     let engine = build_engine()?;
 
-    println!("[nuage] starting initial sync...");
+    ui::step("Starting initial sync");
     let report = engine.full_sync().await?;
 
     let file_count = engine.state().file_count().unwrap_or(0);
@@ -1069,7 +1088,7 @@ async fn cmd_watch() -> Result<()> {
     );
 
     if report.conflicts > 0 {
-        println!("[nuage] {} conflicts resolved", report.conflicts);
+        ui::warn(&format!("{} conflicts resolved", report.conflicts));
     }
 
     sync_loop(&engine).await?;
@@ -1081,14 +1100,14 @@ async fn cmd_watch() -> Result<()> {
 async fn cmd_sync() -> Result<()> {
     let engine = build_engine()?;
 
-    println!("[nuage] syncing...");
+    ui::step("Syncing");
     let report = engine.full_sync().await?;
 
     let total = report.downloaded + report.uploaded + report.deleted_local + report.deleted_remote;
-    println!("[nuage] sync complete ({} changes)", total);
+    ui::success(&format!("Sync complete ({} changes)", total));
 
     if report.conflicts > 0 {
-        println!("[nuage] {} conflicts resolved (local copies renamed)", report.conflicts);
+        ui::warn(&format!("{} conflicts resolved (local copies renamed)", report.conflicts));
     }
 
     Ok(())
@@ -1138,7 +1157,10 @@ async fn cmd_login() -> Result<()> {
         bail!("server URL cannot be empty");
     }
 
-    let token = prompt("API token")?;
+    print!("API token: ");
+    io::stdout().flush()?;
+    let token = rpassword::read_password().context("failed to read token")?;
+    let token = token.trim().to_string();
     if token.is_empty() {
         bail!("token cannot be empty");
     }
@@ -1167,7 +1189,7 @@ async fn cmd_login() -> Result<()> {
     };
 
     println!("\nTesting connection...");
-    let client = api::ApiClient::new(&server_url, &token);
+    let client = api::ApiClient::new(&server_url, &token)?;
     client.test_connection().await?;
     println!("connected successfully");
 

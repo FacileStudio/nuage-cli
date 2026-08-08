@@ -388,14 +388,14 @@ impl SyncEngine {
             let api_clone = ApiClient::new(
                 &self.config.server_url,
                 &self.config.token,
-            );
+            )?;
             let file_clone = file.clone();
             let dest = local_path.clone();
             let permit = semaphore.clone();
 
             join_set.spawn(async move {
                 let _permit = permit.acquire().await.unwrap();
-                transfer::download(&api_clone, file_clone.id, &dest).await?;
+                transfer::download_verified(&api_clone, &file_clone, &dest).await?;
                 Ok((file_clone, dest))
             });
         }

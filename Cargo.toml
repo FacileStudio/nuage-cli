@@ -32,6 +32,7 @@ tokio-util = { version = "0.7", features = ["io"] }
 daemonize = "0.5"
 libc = "0.2"
 shellexpand = "3"
+rpassword = "7"
 
 [profile.release]
 strip = true

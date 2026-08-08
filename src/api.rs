@@ -127,7 +127,7 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-    pub fn new(base_url: &str, token: &str) -> Self {
+    pub fn new(base_url: &str, token: &str) -> Result<Self> {
         let origin = Self::extract_origin(base_url);
         let mut headers = HeaderMap::new();
         if let Ok(val) = HeaderValue::from_str(&origin) {
@@ -138,16 +138,16 @@ impl ApiClient {
             .default_headers(headers.clone())
             .timeout(Duration::from_secs(30))
             .build()
-            .expect("failed to build HTTP client");
+            .map_err(|e| anyhow::anyhow!("failed to build HTTP client: {}", e))?;
 
-        Self {
+        Ok(Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             token: token.to_string(),
             client,
-        }
+        })
     }
 
-    fn transfer_client(&self) -> reqwest::Client {
+    fn transfer_client(&self) -> Result<reqwest::Client> {
         let origin = Self::extract_origin(&self.base_url);
         let mut headers = HeaderMap::new();
         if let Ok(val) = HeaderValue::from_str(&origin) {
@@ -158,7 +158,7 @@ impl ApiClient {
             .default_headers(headers)
             .timeout(Duration::from_secs(300))
             .build()
-            .expect("failed to build transfer HTTP client")
+            .map_err(|e| anyhow::anyhow!("failed to build transfer HTTP client: {}", e))
     }
 
     fn extract_origin(base_url: &str) -> String {
@@ -212,7 +212,7 @@ impl ApiClient {
     }
 
     pub async fn download_file(&self, id: i64) -> Result<bytes::Bytes> {
-        let client = self.transfer_client();
+        let client = self.transfer_client()?;
         let resp = client
             .get(format!("{}/files/{}/download", self.base_url, id))
             .bearer_auth(&self.token)
@@ -238,7 +238,7 @@ impl ApiClient {
         folder_id: Option<i64>,
         data: Vec<u8>,
     ) -> Result<ApiFile> {
-        let client = self.transfer_client();
+        let client = self.transfer_client()?;
 
         let file_part = multipart::Part::bytes(data)
             .file_name(name.to_string())
@@ -435,7 +435,7 @@ impl ApiClient {
     }
 
     pub async fn download_file_stream(&self, id: i64) -> Result<reqwest::Response> {
-        let client = self.transfer_client();
+        let client = self.transfer_client()?;
         let resp = client
             .get(format!("{}/files/{}/download", self.base_url, id))
             .bearer_auth(&self.token)

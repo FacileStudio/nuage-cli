@@ -1,10 +1,27 @@
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 use crate::api::{ApiClient, ApiFile};
 
-pub async fn download(api: &ApiClient, file_id: i64, dest: &Path) -> Result<()> {
+pub async fn download_verified(api: &ApiClient, file: &ApiFile, dest: &Path) -> Result<()> {
+    download_with_hash(api, file.id, dest, file.hash.as_deref()).await
+}
+
+async fn download_with_hash(api: &ApiClient, file_id: i64, dest: &Path, expected_hash: Option<&str>) -> Result<()> {
     let bytes = api.download_file(file_id).await?;
+
+    if let Some(expected) = expected_hash {
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let computed = format!("{:x}", hasher.finalize());
+        if computed != expected {
+            anyhow::bail!(
+                "integrity check failed for file {}: expected {}, got {}",
+                file_id, expected, computed
+            );
+        }
+    }
 
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
@@ -23,6 +40,12 @@ pub async fn download(api: &ApiClient, file_id: i64, dest: &Path) -> Result<()> 
             dest.display()
         )
     })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o644))?;
+    }
 
     Ok(())
 }
