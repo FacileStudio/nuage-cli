@@ -13,7 +13,7 @@ REPO="FacileStudio/nuage-cli"
 BRANCH="main"
 BUILD="rust"
 SRC_SUBDIR="."
-ASSET=""
+ASSET="nuage"
 SKILL="nuage"
 GO_VERSION_VAR=""
 
@@ -130,7 +130,14 @@ install_from_release() {
 
   tar -xzf "$WORK/$archive" -C "$WORK/out" || return 1
   [ -f "$WORK/out/$BIN" ] || return 1
-  install -m 755 "$WORK/out/$BIN" "$BIN_DIR/$BIN" || die "cannot write $BIN_DIR/$BIN"
+  atomic_install "$WORK/out/$BIN" "$BIN_DIR/$BIN" || die "cannot write $BIN_DIR/$BIN"
+}
+
+atomic_install() {
+  local src="$1" dest="$2" staged
+  staged="$(dirname "$dest")/.$(basename "$dest").new.$$"
+  install -m 755 "$src" "$staged" || return 1
+  mv -f "$staged" "$dest" || { rm -f "$staged"; return 1; }
 }
 
 verify_checksum() {
@@ -160,7 +167,7 @@ install_from_source() {
     bun)  build_bun ;;
     *)    die "unknown build backend: $BUILD" ;;
   esac
-  install -m 755 "$WORK/out/$BIN" "$BIN_DIR/$BIN" || die "cannot write $BIN_DIR/$BIN"
+  atomic_install "$WORK/out/$BIN" "$BIN_DIR/$BIN" || die "cannot write $BIN_DIR/$BIN"
 }
 
 build_rust() {

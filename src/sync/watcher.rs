@@ -21,31 +21,28 @@ impl FsWatcher {
             Duration::from_secs(2),
             move |events: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
                 let ignore = IgnoreRules::new(patterns.clone());
-                match events {
-                    Ok(evts) => {
-                        let paths: Vec<PathBuf> = evts
-                            .into_iter()
-                            .filter(|e| e.kind == DebouncedEventKind::Any)
-                            .filter_map(|e| {
-                                let path = &e.path;
-                                let relative = path
-                                    .strip_prefix(&sync_dir_clone)
-                                    .ok()?
-                                    .to_string_lossy()
-                                    .to_string();
-                                if ignore.is_ignored(&relative) {
-                                    None
-                                } else {
-                                    Some(path.clone())
-                                }
-                            })
-                            .collect();
+                if let Ok(evts) = events {
+                    let paths: Vec<PathBuf> = evts
+                        .into_iter()
+                        .filter(|e| e.kind == DebouncedEventKind::Any)
+                        .filter_map(|e| {
+                            let path = &e.path;
+                            let relative = path
+                                .strip_prefix(&sync_dir_clone)
+                                .ok()?
+                                .to_string_lossy()
+                                .to_string();
+                            if ignore.is_ignored(&relative) {
+                                None
+                            } else {
+                                Some(path.clone())
+                            }
+                        })
+                        .collect();
 
-                        if !paths.is_empty() {
-                            let _ = tx.send(paths);
-                        }
+                    if !paths.is_empty() {
+                        let _ = tx.send(paths);
                     }
-                    Err(_) => {}
                 }
             },
         )

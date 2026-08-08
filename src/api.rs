@@ -1,8 +1,20 @@
 use anyhow::{Context, Result};
+use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::multipart;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use sha2::{Digest, Sha256};
+use std::future::Future;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+const MAX_ATTEMPTS: u32 = 4;
+const BASE_DELAY_MS: u64 = 500;
+const MAX_DELAY_MS: u64 = 8_000;
+const MAX_RETRY_AFTER_SECS: u64 = 60;
+const UPLOAD_CHUNK_SIZE: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiFile {
@@ -120,10 +132,69 @@ pub struct SearchApiResponse {
     pub total: i32,
 }
 
-pub struct ApiClient {
+/// Response of `POST /files/upload/init`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UploadSession {
+    pub session_id: String,
+}
+
+/// Response of `POST /files/upload/{sessionId}/complete`, which nests the
+/// created file under a `file` key.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UploadCompleteResponse {
+    pub file: ApiFile,
+}
+
+struct Inner {
     base_url: String,
     token: String,
     client: reqwest::Client,
+    transfer: reqwest::Client,
+}
+
+/// HTTP client for the Nuage API. Cloning is cheap: every clone shares the same
+/// connection pools.
+#[derive(Clone)]
+pub struct ApiClient {
+    inner: Arc<Inner>,
+}
+
+fn is_retryable_error(err: &reqwest::Error) -> bool {
+    err.is_timeout() || err.is_connect() || err.is_request()
+}
+
+fn is_retryable_anyhow(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<reqwest::Error>()
+        .map(is_retryable_error)
+        .unwrap_or(false)
+}
+
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    status.as_u16() == 429 || status.is_server_error()
+}
+
+fn jitter_ms(bound: u64) -> u64 {
+    if bound == 0 {
+        return 0;
+    }
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    nanos % bound
+}
+
+fn backoff_delay(attempt: u32) -> Duration {
+    let factor = 1u64.checked_shl(attempt.saturating_sub(1)).unwrap_or(u64::MAX);
+    let base = BASE_DELAY_MS.saturating_mul(factor).min(MAX_DELAY_MS);
+    let total = base.saturating_add(jitter_ms(base / 2 + 1)).min(MAX_DELAY_MS);
+    Duration::from_millis(total)
+}
+
+fn retry_after_delay(resp: &reqwest::Response) -> Option<Duration> {
+    let raw = resp.headers().get(reqwest::header::RETRY_AFTER)?;
+    let secs = raw.to_str().ok()?.trim().parse::<u64>().ok()?;
+    Some(Duration::from_secs(secs.min(MAX_RETRY_AFTER_SECS)))
 }
 
 impl ApiClient {
@@ -140,25 +211,36 @@ impl ApiClient {
             .build()
             .map_err(|e| anyhow::anyhow!("failed to build HTTP client: {}", e))?;
 
-        Ok(Self {
-            base_url: base_url.trim_end_matches('/').to_string(),
-            token: token.to_string(),
-            client,
-        })
-    }
-
-    fn transfer_client(&self) -> Result<reqwest::Client> {
-        let origin = Self::extract_origin(&self.base_url);
-        let mut headers = HeaderMap::new();
-        if let Ok(val) = HeaderValue::from_str(&origin) {
-            headers.insert("origin", val);
-        }
-
-        reqwest::Client::builder()
+        let transfer = reqwest::Client::builder()
             .default_headers(headers)
             .timeout(Duration::from_secs(300))
             .build()
-            .map_err(|e| anyhow::anyhow!("failed to build transfer HTTP client: {}", e))
+            .map_err(|e| anyhow::anyhow!("failed to build transfer HTTP client: {}", e))?;
+
+        Ok(Self {
+            inner: Arc::new(Inner {
+                base_url: base_url.trim_end_matches('/').to_string(),
+                token: token.to_string(),
+                client,
+                transfer,
+            }),
+        })
+    }
+
+    fn base_url(&self) -> &str {
+        &self.inner.base_url
+    }
+
+    fn token(&self) -> &str {
+        &self.inner.token
+    }
+
+    fn client(&self) -> &reqwest::Client {
+        &self.inner.client
+    }
+
+    fn transfer(&self) -> &reqwest::Client {
+        &self.inner.transfer
     }
 
     fn extract_origin(base_url: &str) -> String {
@@ -170,14 +252,45 @@ impl ApiClient {
         }
     }
 
+    async fn send_with_retry<F, Fut>(&self, what: &str, build: F) -> Result<reqwest::Response>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = reqwest::Result<reqwest::Response>>,
+    {
+        let mut attempt: u32 = 1;
+        loop {
+            match build().await {
+                Ok(resp) => {
+                    if attempt < MAX_ATTEMPTS && is_retryable_status(resp.status()) {
+                        let delay = retry_after_delay(&resp).unwrap_or_else(|| backoff_delay(attempt));
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Ok(resp);
+                }
+                Err(err) => {
+                    if attempt < MAX_ATTEMPTS && is_retryable_error(&err) {
+                        tokio::time::sleep(backoff_delay(attempt)).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(anyhow::Error::new(err).context(what.to_string()));
+                }
+            }
+        }
+    }
+
     pub async fn sync_state(&self) -> Result<SyncStateResponse> {
+        let client = self.client();
+        let url = format!("{}/sync/state", self.base_url());
+        let token = self.token();
+
         let resp = self
-            .client
-            .get(format!("{}/sync/state", self.base_url))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .context("failed to fetch sync state")?;
+            .send_with_retry("failed to fetch sync state", || {
+                client.get(&url).bearer_auth(token).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -191,14 +304,19 @@ impl ApiClient {
     }
 
     pub async fn sync_changes(&self, since: &str) -> Result<SyncChangesResponse> {
+        let client = self.client();
+        let url = format!("{}/sync/changes", self.base_url());
+        let token = self.token();
+
         let resp = self
-            .client
-            .get(format!("{}/sync/changes", self.base_url))
-            .query(&[("since", since)])
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .context("failed to fetch sync changes")?;
+            .send_with_retry("failed to fetch sync changes", || {
+                client
+                    .get(&url)
+                    .query(&[("since", since)])
+                    .bearer_auth(token)
+                    .send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -211,24 +329,62 @@ impl ApiClient {
             .context("failed to parse sync changes response")
     }
 
-    pub async fn download_file(&self, id: i64) -> Result<bytes::Bytes> {
-        let client = self.transfer_client()?;
-        let resp = client
-            .get(format!("{}/files/{}/download", self.base_url, id))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .with_context(|| format!("failed to download file {}", id))?;
+    /// Streams `GET /files/{id}/download` straight to `dest`, hashing on the fly.
+    ///
+    /// The response body is never fully buffered in memory. When `expected_hash`
+    /// is set and the computed SHA-256 digest differs, the partial file is
+    /// removed and an error mentioning `integrity check failed` is returned.
+    pub async fn download_to_file(
+        &self,
+        id: i64,
+        dest: &std::path::Path,
+        expected_hash: Option<&str>,
+    ) -> Result<()> {
+        let client = self.transfer();
+        let url = format!("{}/files/{}/download", self.base_url(), id);
+        let token = self.token();
 
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("GET /files/{}/download failed ({}): {}", id, status, body);
+        let mut attempt: u32 = 1;
+        loop {
+            let sent = client.get(&url).bearer_auth(token).send().await;
+
+            let resp = match sent {
+                Ok(resp) => resp,
+                Err(err) => {
+                    if attempt < MAX_ATTEMPTS && is_retryable_error(&err) {
+                        tokio::time::sleep(backoff_delay(attempt)).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(anyhow::Error::new(err)
+                        .context(format!("failed to download file {}", id)));
+                }
+            };
+
+            let status = resp.status();
+            if !status.is_success() {
+                if attempt < MAX_ATTEMPTS && is_retryable_status(status) {
+                    let delay = retry_after_delay(&resp).unwrap_or_else(|| backoff_delay(attempt));
+                    tokio::time::sleep(delay).await;
+                    attempt += 1;
+                    continue;
+                }
+                let body = resp.text().await.unwrap_or_default();
+                anyhow::bail!("GET /files/{}/download failed ({}): {}", id, status, body);
+            }
+
+            match stream_response_to_file(resp, id, dest, expected_hash).await {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    if attempt < MAX_ATTEMPTS && is_retryable_anyhow(&err) {
+                        tokio::time::sleep(backoff_delay(attempt)).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(err);
+                }
+            }
         }
-
-        resp.bytes()
-            .await
-            .with_context(|| format!("failed to read bytes for file {}", id))
     }
 
     pub async fn upload_file(
@@ -238,26 +394,28 @@ impl ApiClient {
         folder_id: Option<i64>,
         data: Vec<u8>,
     ) -> Result<ApiFile> {
-        let client = self.transfer_client()?;
+        let client = self.transfer();
+        let url = format!("{}/files", self.base_url());
+        let token = self.token();
 
-        let file_part = multipart::Part::bytes(data)
-            .file_name(name.to_string())
-            .mime_str(mime)
-            .context("invalid mime type")?;
-
-        let mut form = multipart::Form::new().part("file", file_part);
-
-        if let Some(fid) = folder_id {
-            form = form.text("folder_id", fid.to_string());
-        }
-
-        let resp = client
-            .post(format!("{}/files", self.base_url))
-            .bearer_auth(&self.token)
-            .multipart(form)
-            .send()
-            .await
-            .context("failed to upload file")?;
+        let resp = self
+            .send_with_retry("failed to upload file", || {
+                let data = data.clone();
+                let name = name.to_string();
+                let mime = mime.to_string();
+                let url = url.clone();
+                async move {
+                    let file_part = multipart::Part::bytes(data)
+                        .file_name(name)
+                        .mime_str(&mime)?;
+                    let mut form = multipart::Form::new().part("file", file_part);
+                    if let Some(fid) = folder_id {
+                        form = form.text("folder_id", fid.to_string());
+                    }
+                    client.post(&url).bearer_auth(token).multipart(form).send().await
+                }
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -270,20 +428,242 @@ impl ApiClient {
             .context("failed to parse upload response")
     }
 
+    /// Replaces the content of an existing file via `POST /files/{id}/reupload`,
+    /// preserving its id, share links and version history.
+    pub async fn reupload_file(
+        &self,
+        id: i64,
+        name: &str,
+        mime: &str,
+        data: Vec<u8>,
+    ) -> Result<ApiFile> {
+        let client = self.transfer();
+        let url = format!("{}/files/{}/reupload", self.base_url(), id);
+        let token = self.token();
+
+        let resp = self
+            .send_with_retry("failed to reupload file", || {
+                let data = data.clone();
+                let name = name.to_string();
+                let mime = mime.to_string();
+                let url = url.clone();
+                async move {
+                    let file_part = multipart::Part::bytes(data)
+                        .file_name(name)
+                        .mime_str(&mime)?;
+                    let form = multipart::Form::new().part("file", file_part);
+                    client.post(&url).bearer_auth(token).multipart(form).send().await
+                }
+            })
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("POST /files/{}/reupload failed ({}): {}", id, status, body);
+        }
+
+        resp.json()
+            .await
+            .with_context(|| format!("failed to parse reupload response for file {}", id))
+    }
+
+    /// Uploads `path` through the chunked session endpoints (init, parts,
+    /// complete), reading the file from disk in 32 MiB chunks.
+    ///
+    /// If any step after init fails, the upload session is aborted before the
+    /// original error is returned.
+    pub async fn upload_file_chunked(
+        &self,
+        name: &str,
+        mime: &str,
+        folder_id: Option<i64>,
+        path: &std::path::Path,
+    ) -> Result<ApiFile> {
+        let total_size = tokio::fs::metadata(path)
+            .await
+            .with_context(|| format!("cannot stat file for upload: {}", path.display()))?
+            .len() as i64;
+
+        let session = self.upload_init(name, mime, total_size, folder_id).await?;
+
+        match self.upload_parts_and_complete(&session.session_id, path).await {
+            Ok(file) => Ok(file),
+            Err(err) => {
+                let _ = self.upload_abort(&session.session_id).await;
+                Err(err)
+            }
+        }
+    }
+
+    async fn upload_init(
+        &self,
+        name: &str,
+        mime: &str,
+        total_size: i64,
+        folder_id: Option<i64>,
+    ) -> Result<UploadSession> {
+        let client = self.client();
+        let url = format!("{}/files/upload/init", self.base_url());
+        let token = self.token();
+        let body = serde_json::json!({
+            "file_name": name,
+            "mime_type": mime,
+            "total_size": total_size,
+            "folder_id": folder_id,
+        });
+
+        let resp = self
+            .send_with_retry("failed to init chunked upload", || {
+                client.post(&url).bearer_auth(token).json(&body).send()
+            })
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("POST /files/upload/init failed ({}): {}", status, body_text);
+        }
+
+        resp.json()
+            .await
+            .context("failed to parse upload init response")
+    }
+
+    async fn upload_parts_and_complete(
+        &self,
+        session_id: &str,
+        path: &std::path::Path,
+    ) -> Result<ApiFile> {
+        let mut file = tokio::fs::File::open(path)
+            .await
+            .with_context(|| format!("cannot open file for upload: {}", path.display()))?;
+
+        let mut buf = vec![0u8; UPLOAD_CHUNK_SIZE];
+        let mut part_number: u32 = 1;
+
+        loop {
+            let filled = read_full(&mut file, &mut buf)
+                .await
+                .with_context(|| format!("cannot read file for upload: {}", path.display()))?;
+
+            if filled == 0 {
+                break;
+            }
+
+            self.upload_part(session_id, part_number, &buf[..filled]).await?;
+            part_number += 1;
+
+            if filled < UPLOAD_CHUNK_SIZE {
+                break;
+            }
+        }
+
+        self.upload_complete(session_id).await
+    }
+
+    async fn upload_part(&self, session_id: &str, part_number: u32, chunk: &[u8]) -> Result<()> {
+        let client = self.transfer();
+        let url = format!(
+            "{}/files/upload/{}/part/{}",
+            self.base_url(),
+            session_id,
+            part_number
+        );
+        let token = self.token();
+
+        let resp = self
+            .send_with_retry("failed to upload chunk", || {
+                let body = chunk.to_vec();
+                client.put(&url).bearer_auth(token).body(body).send()
+            })
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "PUT /files/upload/{}/part/{} failed ({}): {}",
+                session_id,
+                part_number,
+                status,
+                body
+            );
+        }
+
+        Ok(())
+    }
+
+    async fn upload_complete(&self, session_id: &str) -> Result<ApiFile> {
+        let client = self.client();
+        let url = format!("{}/files/upload/{}/complete", self.base_url(), session_id);
+        let token = self.token();
+
+        let resp = self
+            .send_with_retry("failed to complete chunked upload", || {
+                client.post(&url).bearer_auth(token).send()
+            })
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "POST /files/upload/{}/complete failed ({}): {}",
+                session_id,
+                status,
+                body
+            );
+        }
+
+        let complete: UploadCompleteResponse = resp
+            .json()
+            .await
+            .context("failed to parse upload complete response")?;
+
+        Ok(complete.file)
+    }
+
+    async fn upload_abort(&self, session_id: &str) -> Result<()> {
+        let client = self.client();
+        let url = format!("{}/files/upload/{}", self.base_url(), session_id);
+        let token = self.token();
+
+        let resp = self
+            .send_with_retry("failed to abort chunked upload", || {
+                client.delete(&url).bearer_auth(token).send()
+            })
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "DELETE /files/upload/{} failed ({}): {}",
+                session_id,
+                status,
+                body
+            );
+        }
+
+        Ok(())
+    }
+
     pub async fn create_folder(&self, name: &str, parent_id: Option<i64>) -> Result<ApiFolder> {
         let mut body = serde_json::json!({ "name": name });
         if let Some(pid) = parent_id {
             body["parent_id"] = serde_json::json!(pid);
         }
 
+        let client = self.client();
+        let url = format!("{}/folders", self.base_url());
+        let token = self.token();
+
         let resp = self
-            .client
-            .post(format!("{}/folders", self.base_url))
-            .bearer_auth(&self.token)
-            .json(&body)
-            .send()
-            .await
-            .context("failed to create folder")?;
+            .send_with_retry("failed to create folder", || {
+                client.post(&url).bearer_auth(token).json(&body).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -305,14 +685,15 @@ impl ApiClient {
             body.insert("folder_id".into(), serde_json::json!(fid.unwrap_or(0)));
         }
 
+        let client = self.client();
+        let url = format!("{}/files/{}", self.base_url(), id);
+        let token = self.token();
+
         let resp = self
-            .client
-            .put(format!("{}/files/{}", self.base_url, id))
-            .bearer_auth(&self.token)
-            .json(&body)
-            .send()
-            .await
-            .with_context(|| format!("failed to update file {}", id))?;
+            .send_with_retry(&format!("failed to update file {}", id), || {
+                client.put(&url).bearer_auth(token).json(&body).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -334,14 +715,15 @@ impl ApiClient {
             body.insert("parent_id".into(), serde_json::json!(pid.unwrap_or(0)));
         }
 
+        let client = self.client();
+        let url = format!("{}/folders/{}", self.base_url(), id);
+        let token = self.token();
+
         let resp = self
-            .client
-            .put(format!("{}/folders/{}", self.base_url, id))
-            .bearer_auth(&self.token)
-            .json(&body)
-            .send()
-            .await
-            .with_context(|| format!("failed to update folder {}", id))?;
+            .send_with_retry(&format!("failed to update folder {}", id), || {
+                client.put(&url).bearer_auth(token).json(&body).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -355,13 +737,15 @@ impl ApiClient {
     }
 
     pub async fn delete_file(&self, id: i64) -> Result<()> {
+        let client = self.client();
+        let url = format!("{}/files/{}", self.base_url(), id);
+        let token = self.token();
+
         let resp = self
-            .client
-            .delete(format!("{}/files/{}", self.base_url, id))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .with_context(|| format!("failed to delete file {}", id))?;
+            .send_with_retry(&format!("failed to delete file {}", id), || {
+                client.delete(&url).bearer_auth(token).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -373,13 +757,15 @@ impl ApiClient {
     }
 
     pub async fn delete_folder(&self, id: i64) -> Result<()> {
+        let client = self.client();
+        let url = format!("{}/folders/{}", self.base_url(), id);
+        let token = self.token();
+
         let resp = self
-            .client
-            .delete(format!("{}/folders/{}", self.base_url, id))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .with_context(|| format!("failed to delete folder {}", id))?;
+            .send_with_retry(&format!("failed to delete folder {}", id), || {
+                client.delete(&url).bearer_auth(token).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -396,13 +782,15 @@ impl ApiClient {
     }
 
     pub async fn list_folders(&self) -> Result<Vec<ApiFolder>> {
+        let client = self.client();
+        let url = format!("{}/folders", self.base_url());
+        let token = self.token();
+
         let resp = self
-            .client
-            .get(format!("{}/folders", self.base_url))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .context("failed to list folders")?;
+            .send_with_retry("failed to list folders", || {
+                client.get(&url).bearer_auth(token).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -415,13 +803,15 @@ impl ApiClient {
     }
 
     pub async fn get_folder(&self, id: i64) -> Result<FolderDetailResponse> {
+        let client = self.client();
+        let url = format!("{}/folders/{}", self.base_url(), id);
+        let token = self.token();
+
         let resp = self
-            .client
-            .get(format!("{}/folders/{}", self.base_url, id))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .with_context(|| format!("failed to get folder {}", id))?;
+            .send_with_retry(&format!("failed to get folder {}", id), || {
+                client.get(&url).bearer_auth(token).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -435,13 +825,15 @@ impl ApiClient {
     }
 
     pub async fn download_file_stream(&self, id: i64) -> Result<reqwest::Response> {
-        let client = self.transfer_client()?;
-        let resp = client
-            .get(format!("{}/files/{}/download", self.base_url, id))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .with_context(|| format!("failed to download file {}", id))?;
+        let client = self.transfer();
+        let url = format!("{}/files/{}/download", self.base_url(), id);
+        let token = self.token();
+
+        let resp = self
+            .send_with_retry(&format!("failed to download file {}", id), || {
+                client.get(&url).bearer_auth(token).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -471,14 +863,15 @@ impl ApiClient {
             body.insert("expires_at".into(), serde_json::json!(exp));
         }
 
+        let client = self.client();
+        let url = format!("{}/shares", self.base_url());
+        let token = self.token();
+
         let resp = self
-            .client
-            .post(format!("{}/shares", self.base_url))
-            .bearer_auth(&self.token)
-            .json(&body)
-            .send()
-            .await
-            .context("failed to create share")?;
+            .send_with_retry("failed to create share", || {
+                client.post(&url).bearer_auth(token).json(&body).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -490,13 +883,15 @@ impl ApiClient {
     }
 
     pub async fn list_shares(&self) -> Result<Vec<ShareResponse>> {
+        let client = self.client();
+        let url = format!("{}/shares/by-me", self.base_url());
+        let token = self.token();
+
         let resp = self
-            .client
-            .get(format!("{}/shares/by-me", self.base_url))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .context("failed to list shares")?;
+            .send_with_retry("failed to list shares", || {
+                client.get(&url).bearer_auth(token).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -509,13 +904,15 @@ impl ApiClient {
     }
 
     pub async fn delete_share(&self, id: i64) -> Result<()> {
+        let client = self.client();
+        let url = format!("{}/shares/{}", self.base_url(), id);
+        let token = self.token();
+
         let resp = self
-            .client
-            .delete(format!("{}/shares/{}", self.base_url, id))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .with_context(|| format!("failed to delete share {}", id))?;
+            .send_with_retry(&format!("failed to delete share {}", id), || {
+                client.delete(&url).bearer_auth(token).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -544,14 +941,15 @@ impl ApiClient {
             params.push(("folder_id".to_string(), fid.to_string()));
         }
 
+        let client = self.client();
+        let url = format!("{}/search", self.base_url());
+        let token = self.token();
+
         let resp = self
-            .client
-            .get(format!("{}/search", self.base_url))
-            .query(&params)
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .context("failed to search")?;
+            .send_with_retry("failed to search", || {
+                client.get(&url).query(&params).bearer_auth(token).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -564,13 +962,15 @@ impl ApiClient {
     }
 
     pub async fn list_tokens(&self) -> Result<Vec<ApiToken>> {
+        let client = self.client();
+        let url = format!("{}/users/me/api-token", self.base_url());
+        let token = self.token();
+
         let resp = self
-            .client
-            .get(format!("{}/users/me/api-token", self.base_url))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .context("failed to list tokens")?;
+            .send_with_retry("failed to list tokens", || {
+                client.get(&url).bearer_auth(token).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -584,14 +984,15 @@ impl ApiClient {
 
     pub async fn create_token(&self, name: &str) -> Result<ApiToken> {
         let body = serde_json::json!({ "name": name });
+        let client = self.client();
+        let url = format!("{}/users/me/api-token", self.base_url());
+        let token = self.token();
+
         let resp = self
-            .client
-            .post(format!("{}/users/me/api-token", self.base_url))
-            .bearer_auth(&self.token)
-            .json(&body)
-            .send()
-            .await
-            .context("failed to create token")?;
+            .send_with_retry("failed to create token", || {
+                client.post(&url).bearer_auth(token).json(&body).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -603,13 +1004,15 @@ impl ApiClient {
     }
 
     pub async fn delete_token(&self, id: i64) -> Result<()> {
+        let client = self.client();
+        let url = format!("{}/users/me/api-token/{}", self.base_url(), id);
+        let token = self.token();
+
         let resp = self
-            .client
-            .delete(format!("{}/users/me/api-token/{}", self.base_url, id))
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .with_context(|| format!("failed to delete token {}", id))?;
+            .send_with_retry(&format!("failed to delete token {}", id), || {
+                client.delete(&url).bearer_auth(token).send()
+            })
+            .await?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -619,4 +1022,71 @@ impl ApiClient {
 
         Ok(())
     }
+}
+
+async fn read_full(file: &mut tokio::fs::File, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        let n = file.read(&mut buf[filled..]).await?;
+        if n == 0 {
+            break;
+        }
+        filled += n;
+    }
+    Ok(filled)
+}
+
+async fn stream_response_to_file(
+    resp: reqwest::Response,
+    id: i64,
+    dest: &Path,
+    expected_hash: Option<&str>,
+) -> Result<()> {
+    let mut out = tokio::fs::File::create(dest)
+        .await
+        .with_context(|| format!("cannot create file: {}", dest.display()))?;
+
+    let mut hasher = Sha256::new();
+    let mut stream = resp.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(err) => {
+                let _ = tokio::fs::remove_file(dest).await;
+                return Err(anyhow::Error::new(err)
+                    .context(format!("failed to read download stream for file {}", id)));
+            }
+        };
+
+        if let Err(err) = out.write_all(&chunk).await {
+            let _ = tokio::fs::remove_file(dest).await;
+            return Err(anyhow::Error::new(err)
+                .context(format!("cannot write file: {}", dest.display())));
+        }
+
+        hasher.update(&chunk);
+    }
+
+    if let Err(err) = out.flush().await {
+        let _ = tokio::fs::remove_file(dest).await;
+        return Err(anyhow::Error::new(err)
+            .context(format!("cannot flush file: {}", dest.display())));
+    }
+    drop(out);
+
+    if let Some(expected) = expected_hash {
+        let computed = format!("{:x}", hasher.finalize());
+        if computed != expected {
+            let _ = tokio::fs::remove_file(dest).await;
+            anyhow::bail!(
+                "integrity check failed for file {}: expected {}, got {}",
+                id,
+                expected,
+                computed
+            );
+        }
+    }
+
+    Ok(())
 }

@@ -13,7 +13,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use api::{ApiClient, ApiFile, ApiFolder};
 use sync::transfer;
@@ -44,7 +44,7 @@ enum Command {
     /// Restart background daemon
     Restart,
     /// Run one-time sync
-    Sync,
+    Sync(SyncArgs),
     /// Start foreground watcher (for debugging)
     Watch,
     /// Show sync and daemon status
@@ -84,6 +84,24 @@ enum Command {
 struct LogsArgs {
     #[arg(short, long)]
     follow: bool,
+}
+
+#[derive(clap::Args)]
+struct SyncArgs {
+    #[arg(long, help = "Show what would change without applying anything")]
+    dry_run: bool,
+    #[arg(
+        long,
+        help = "Allow propagating an unusually large batch of local deletions"
+    )]
+    allow_bulk_delete: bool,
+    #[arg(long, help = "Clear quarantined files and retry them")]
+    retry_failed: bool,
+    #[arg(
+        long,
+        help = "Drop tracking records whose local file is gone, without deleting anything on the server, then re-enumerate"
+    )]
+    repair_state: bool,
 }
 
 #[derive(clap::Args)]
@@ -226,7 +244,7 @@ fn run(cli: Cli) -> Result<()> {
             rt.block_on(async {
                 match other {
                     None | Some(Command::Watch) => cmd_watch().await,
-                    Some(Command::Sync) => cmd_sync().await,
+                    Some(Command::Sync(args)) => cmd_sync(&args).await,
                     Some(Command::Status) => cmd_status().await,
                     Some(Command::Login) => cmd_login().await,
                     Some(Command::Upgrade) => cmd_upgrade().await,
@@ -478,12 +496,10 @@ async fn cmd_ls(args: &LsArgs, json: bool) -> Result<()> {
                 entry.name.clone()
             };
             println!("{}  {}  {}", size_str, date, display_name);
+        } else if entry.kind == "folder" {
+            println!("{}/", entry.name);
         } else {
-            if entry.kind == "folder" {
-                println!("{}/", entry.name);
-            } else {
-                println!("{}", entry.name);
-            }
+            println!("{}", entry.name);
         }
     }
 
@@ -572,7 +588,7 @@ async fn cmd_download(args: &DownloadArgs, json: bool) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
 
-    let tmp_path = local_path.with_extension("nuage-tmp");
+    let tmp_path = sync::transfer::temp_path_for(&local_path, file.id);
     let mut out = std::fs::File::create(&tmp_path)
         .with_context(|| format!("cannot create: {}", tmp_path.display()))?;
 
@@ -951,7 +967,7 @@ fn cmd_stop() -> Result<()> {
                 std::thread::sleep(std::time::Duration::from_millis(100));
                 let alive = unsafe { libc::kill(pid as i32, 0) == 0 };
                 if !alive {
-                    let _ = std::fs::remove_file(daemon::pid_path()?);
+                    let _ = daemon::clear_runtime_files();
                     ui::success(&format!("Stopped (was PID {})", pid));
                     return Ok(());
                 }
@@ -961,7 +977,7 @@ fn cmd_stop() -> Result<()> {
                 libc::kill(pid as i32, libc::SIGKILL);
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
-            let _ = std::fs::remove_file(daemon::pid_path()?);
+            let _ = daemon::clear_runtime_files();
             ui::success(&format!("Killed (PID {})", pid));
             Ok(())
         }
@@ -1021,12 +1037,26 @@ async fn sync_loop(engine: &sync::SyncEngine) -> Result<()> {
 
     loop {
         if let Some(paths) = watcher.try_recv() {
-            if let Err(e) = engine.process_local_changes(paths).await {
-                error!("local sync error: {}", e);
+            tokio::select! {
+                biased;
+                _ = sigterm.recv() => {
+                    info!("shutting down (SIGTERM)");
+                    break;
+                }
+                _ = sigint.recv() => {
+                    info!("shutting down (SIGINT)");
+                    break;
+                }
+                result = engine.process_local_changes(paths) => {
+                    if let Err(e) = result {
+                        error!("local sync error: {}", e);
+                    }
+                }
             }
         }
 
         tokio::select! {
+            biased;
             _ = sigterm.recv() => {
                 info!("shutting down (SIGTERM)");
                 break;
@@ -1036,12 +1066,16 @@ async fn sync_loop(engine: &sync::SyncEngine) -> Result<()> {
                 break;
             }
             _ = poll_timer.tick() => {
-                match engine.process_remote_changes().await {
+                match engine.full_sync().await {
                     Ok(report) => {
-                        let total = report.downloaded + report.uploaded
-                            + report.deleted_local + report.deleted_remote;
-                        if total > 0 {
-                            info!("sync ({} changes)", total);
+                        if report.total_changes() > 0 {
+                            info!("sync ({} changes)", report.total_changes());
+                        }
+                        if report.blocked_deletes > 0 {
+                            warn!(
+                                "{} deletion(s) held back by the safety guard — run `nuage sync --dry-run` to inspect",
+                                report.blocked_deletes
+                            );
                         }
                     }
                     Err(e) => error!("remote sync error: {}", e),
@@ -1056,6 +1090,12 @@ async fn sync_loop(engine: &sync::SyncEngine) -> Result<()> {
 
 async fn run_daemon() -> Result<()> {
     let engine = build_engine()?;
+    engine.preflight()?;
+
+    let _ = daemon::write_meta();
+    if config::Config::ensure_secure_permissions().unwrap_or(false) {
+        warn!("tightened permissions on ~/.nuage.yml — it held an API token readable by other users");
+    }
 
     info!("daemon started, PID {}", std::process::id());
 
@@ -1066,16 +1106,23 @@ async fn run_daemon() -> Result<()> {
     if report.conflicts > 0 {
         info!("{} conflicts resolved", report.conflicts);
     }
+    if report.blocked_deletes > 0 {
+        warn!(
+            "{} deletion(s) held back by the safety guard — run `nuage sync --dry-run` to inspect",
+            report.blocked_deletes
+        );
+    }
 
     sync_loop(&engine).await?;
 
-    let _ = std::fs::remove_file(daemon::pid_path()?);
+    let _ = daemon::clear_runtime_files();
     info!("daemon stopped");
     Ok(())
 }
 
 async fn cmd_watch() -> Result<()> {
     let engine = build_engine()?;
+    engine.preflight()?;
 
     ui::step("Starting initial sync");
     let report = engine.full_sync().await?;
@@ -1087,9 +1134,7 @@ async fn cmd_watch() -> Result<()> {
         file_count
     );
 
-    if report.conflicts > 0 {
-        ui::warn(&format!("{} conflicts resolved", report.conflicts));
-    }
+    report_warnings(&report);
 
     sync_loop(&engine).await?;
 
@@ -1097,25 +1142,136 @@ async fn cmd_watch() -> Result<()> {
     Ok(())
 }
 
-async fn cmd_sync() -> Result<()> {
-    let engine = build_engine()?;
+async fn cmd_sync(args: &SyncArgs) -> Result<()> {
+    let options = sync::SyncOptions {
+        dry_run: args.dry_run,
+        allow_bulk_delete: args.allow_bulk_delete,
+    };
+    let engine = build_engine()?.with_options(options);
+    engine.preflight()?;
 
-    ui::step("Syncing");
-    let report = engine.full_sync().await?;
-
-    let total = report.downloaded + report.uploaded + report.deleted_local + report.deleted_remote;
-    ui::success(&format!("Sync complete ({} changes)", total));
-
-    if report.conflicts > 0 {
-        ui::warn(&format!("{} conflicts resolved (local copies renamed)", report.conflicts));
+    if args.retry_failed {
+        let cleared = engine.state().clear_all_quarantine()?;
+        if cleared > 0 {
+            ui::step(&format!("Cleared {} quarantined file(s)", cleared));
+        }
     }
 
+    if args.repair_state {
+        repair_state(&engine, args.dry_run)?;
+    }
+
+    if args.dry_run {
+        ui::step("Dry run — nothing will be modified");
+    } else {
+        ui::step("Syncing");
+    }
+
+    let report = engine.full_sync().await?;
+
+    if args.dry_run {
+        if report.planned.is_empty() {
+            ui::success("Already in sync — no changes planned");
+        } else {
+            for line in &report.planned {
+                println!("  {}", line);
+            }
+            ui::success(&format!("{} change(s) planned", report.planned.len()));
+        }
+    } else {
+        ui::success(&format!("Sync complete ({} changes)", report.total_changes()));
+    }
+
+    report_warnings(&report);
     Ok(())
+}
+
+/// Drops tracking records that point at local files which no longer exist, leaving the
+/// server untouched, then forgets the cursor so the next pass rebuilds tracking from the
+/// server's own view. This recovers from state that drifted out of agreement with the
+/// filesystem — for example records written at the sync root because a file's parent
+/// folder could not be resolved at the time.
+fn repair_state(engine: &sync::SyncEngine, dry_run: bool) -> Result<()> {
+    let sync_dir = engine.sync_dir();
+    let state = engine.state();
+
+    let stale_files: Vec<String> = state
+        .all_files()?
+        .into_iter()
+        .map(|r| r.local_path)
+        .filter(|p| !sync_dir.join(p).exists())
+        .collect();
+
+    let stale_folders: Vec<String> = state
+        .all_folders()?
+        .into_iter()
+        .map(|r| r.local_path)
+        .filter(|p| !sync_dir.join(p).is_dir())
+        .collect();
+
+    if stale_files.is_empty() && stale_folders.is_empty() {
+        ui::step("State is consistent with the filesystem — nothing to repair");
+        return Ok(());
+    }
+
+    if dry_run {
+        ui::warn(&format!(
+            "would drop {} stale file record(s) and {} stale folder record(s); the server would not be touched",
+            stale_files.len(),
+            stale_folders.len()
+        ));
+        return Ok(());
+    }
+
+    for path in &stale_files {
+        state.remove_file(path)?;
+    }
+    for path in &stale_folders {
+        state.remove_folder(path)?;
+    }
+    state.clear_cursor()?;
+
+    ui::success(&format!(
+        "Dropped {} stale file record(s) and {} stale folder record(s) — the server was not modified",
+        stale_files.len(),
+        stale_folders.len()
+    ));
+    Ok(())
+}
+
+fn report_warnings(report: &sync::SyncReport) {
+    if report.conflicts > 0 {
+        ui::warn(&format!(
+            "{} conflict(s) — both versions kept, local copy renamed",
+            report.conflicts
+        ));
+    }
+    if report.blocked_deletes > 0 {
+        ui::warn(&format!(
+            "{} deletion(s) held back by the safety guard — see `nuage sync --dry-run`",
+            report.blocked_deletes
+        ));
+    }
+    if report.skipped > 0 {
+        ui::warn(&format!(
+            "{} quarantined file(s) skipped — retry with `nuage sync --retry-failed`",
+            report.skipped
+        ));
+    }
+    if report.errors > 0 {
+        ui::warn(&format!("{} item(s) failed this pass", report.errors));
+    }
 }
 
 async fn cmd_status() -> Result<()> {
     match daemon::is_running()? {
-        Some(pid) => println!("Daemon: running (PID {})", pid),
+        Some(pid) => {
+            println!("Daemon: running (PID {})", pid);
+            if let Ok(Some(meta)) = daemon::read_meta() {
+                println!("Started: {}", meta.started_at);
+                println!("Binary: {}", meta.exe);
+            }
+        }
         None => println!("Daemon: stopped"),
     }
 
@@ -1144,6 +1300,18 @@ async fn cmd_status() -> Result<()> {
 
     if !config.selective_sync.is_empty() {
         println!("Selective sync: {}", config.selective_sync.join(", "));
+    }
+
+    let quarantined = state.list_quarantined()?;
+    if !quarantined.is_empty() {
+        println!("\nQuarantined ({}):", quarantined.len());
+        for record in &quarantined {
+            println!(
+                "  file {} — {} failure(s): {}",
+                record.facile_id, record.attempts, record.reason
+            );
+        }
+        println!("\nRetry with `nuage sync --retry-failed`.");
     }
 
     Ok(())
@@ -1207,8 +1375,17 @@ async fn cmd_login() -> Result<()> {
     Ok(())
 }
 
+/// Upgrades in place. The daemon is stopped first: replacing the executable of a
+/// running process leaves it holding a half-written image, and a daemon left running
+/// through an upgrade would keep serving the old code anyway.
 async fn cmd_upgrade() -> Result<()> {
-    println!("Upgrading nuage...");
+    let was_running = daemon::is_running()?.is_some();
+    if was_running {
+        ui::step("Stopping daemon for upgrade");
+        cmd_stop()?;
+    }
+
+    ui::step("Upgrading nuage");
     let status = std::process::Command::new("cargo")
         .args([
             "install",
@@ -1217,10 +1394,21 @@ async fn cmd_upgrade() -> Result<()> {
             "--force",
         ])
         .status()?;
+
     if !status.success() {
+        if was_running {
+            ui::warn("Upgrade failed — restarting the previous daemon");
+            let _ = cmd_start();
+        }
         bail!("upgrade failed");
     }
-    println!("Upgraded to latest version.");
+
+    if was_running {
+        ui::step("Restarting daemon");
+        cmd_start()?;
+    }
+
+    ui::success("Upgraded to the latest version");
     Ok(())
 }
 
