@@ -1,6 +1,6 @@
 # nuage-cli — Configuration
 
-Every key the config file accepts, every path the CLI writes to, and the one environment
+Every key the config file accepts, every path the CLI writes to, and every environment
 variable the code reads.
 
 ## The config file
@@ -32,8 +32,14 @@ selective_sync: []
 | `ignore_patterns` | no | `[]` | Globs excluded from sync |
 | `selective_sync` | no | `[]` | Path prefixes to sync. Empty means everything |
 
-Validation runs at load: a missing file, malformed YAML, an empty `server_url` or an empty
-`token` all fail before anything touches the network.
+Validation runs at load, after the environment overrides below are applied: malformed YAML, an
+empty `server_url` or an empty `token` all fail before anything touches the network. A missing
+file is not itself an error — it validates as empty, and fails only if the environment does not
+supply what it lacks, which is what lets `NUAGE_TOKEN` and `NUAGE_SERVER_URL` work on a machine
+that has never run `nuage login`.
+
+`nuage login` and `nuage logout` read this file through a path that skips validation, so they
+still work when the field they are about to write is the missing one.
 
 ## The `/api` suffix
 
@@ -75,9 +81,20 @@ prints the active list.
 
 ## Environment variables
 
-The CLI reads no `NUAGE_*` variables. Configuration comes exclusively from `~/.nuage.yml`.
+| Variable | Overrides | Notes |
+|---|---|---|
+| `NUAGE_TOKEN` | `token` | Blank or unset is ignored, so exporting an empty string does not lock you out |
+| `NUAGE_SERVER_URL` | `server_url` | Taken verbatim; unlike `--server` it is not given an `/api` suffix |
 
-The one variable that matters is `RUST_LOG`, consumed by
+Precedence is **flag, then environment, then config file, then built-in default**, applied at
+load. Both variables are read on every command, and either one is enough on its own — with both
+set the CLI works with no config file at all, which is the point: a pipeline cannot run an
+interactive login and must not commit a credential.
+
+`nuage logout` warns when `NUAGE_TOKEN` is still set, since clearing the file changes nothing
+while the variable outranks it.
+
+The other variable that matters is `RUST_LOG`, consumed by
 `tracing_subscriber::EnvFilter::from_default_env()` in both the terminal and daemon logging
 setups. `INFO` is added as a directive on top of whatever it parses, so `RUST_LOG=debug`
 raises verbosity for the sync engine's `debug!` lines.
@@ -116,10 +133,11 @@ already have one. `nuage token revoke <id>` invalidates one.
 
 | Symptom | Cause |
 |---|---|
-| `cannot read /Users/you/.nuage.yml` | No config. Run `nuage login` |
-| `invalid config at ...` | Malformed YAML, or `server_url` / `token` missing |
-| `server_url cannot be empty in ~/.nuage.yml` | Present but blank |
-| `token cannot be empty in ~/.nuage.yml` | Present but blank |
+| `invalid config at ...` | Malformed YAML |
+| ``no server_url configured — run `nuage login --server ...` `` | No config file, or the key is blank, and `NUAGE_SERVER_URL` is unset |
+| ``not signed in — run `nuage login`, or set NUAGE_TOKEN`` | Signed out, or never signed in |
+| ``the sign-in callback did not match this login attempt`` | Something other than your browser hit the loopback port. Run `nuage login` again |
+| ``the server refused the login code (400)`` | The one-time code expired. It lasts sixty seconds |
 | `GET /sync/state failed (401): ...` | Wrong or revoked token |
 | `GET /sync/state failed (404): ...` | `server_url` is missing the `/api` suffix |
 | `cannot create sync directory: ...` | `sync_dir` is not writable |

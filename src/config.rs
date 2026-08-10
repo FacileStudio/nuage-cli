@@ -10,9 +10,33 @@ fn default_poll_interval() -> u64 {
     30
 }
 
+/// The credential, when the environment supplies one.
+///
+/// CI cannot run an interactive login and must not commit a config file, so an
+/// env var is the only credential channel it has.
+pub fn env_token() -> Option<String> {
+    non_empty("NUAGE_TOKEN")
+}
+
+/// The instance, when the environment supplies one.
+pub fn env_server_url() -> Option<String> {
+    non_empty("NUAGE_SERVER_URL")
+}
+
+fn non_empty(key: &str) -> Option<String> {
+    let value = std::env::var(key).ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default)]
     pub server_url: String,
+    #[serde(default)]
     pub token: String,
     #[serde(default = "default_sync_dir")]
     pub sync_dir: String,
@@ -24,6 +48,21 @@ pub struct Config {
     pub selective_sync: Vec<String>,
 }
 
+/// A config nobody has written yet: the same field values the serde defaults
+/// would produce, so a file-less run and a minimal file behave identically.
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            server_url: String::new(),
+            token: String::new(),
+            sync_dir: default_sync_dir(),
+            poll_interval: default_poll_interval(),
+            ignore_patterns: Vec::new(),
+            selective_sync: Vec::new(),
+        }
+    }
+}
+
 impl Config {
     pub fn path() -> Result<PathBuf> {
         let home = dirs::home_dir().context("cannot determine home directory")?;
@@ -31,27 +70,50 @@ impl Config {
     }
 
     pub fn load() -> Result<Self> {
-        let path = Self::path()?;
-        let contents = std::fs::read_to_string(&path).with_context(|| {
-            format!(
-                "cannot read {}\n\
-                 Create ~/.nuage.yml with your server_url and token.\n\
-                 Run `nuage login` for interactive setup.",
-                path.display()
-            )
-        })?;
-        let config: Self = serde_yaml::from_str(&contents)
-            .with_context(|| format!("invalid config at {}", path.display()))?;
+        let mut config = Self::load_or_default()?;
+        config.apply_env();
         config.validate()?;
         Ok(config)
     }
 
+    /// Reads the config without validating it, treating an absent file as a
+    /// fresh one.
+    ///
+    /// `login` and `logout` need this: refusing to run because the very field
+    /// they are about to write is missing would make the config unrepairable by
+    /// the command that exists to repair it. It is also the read half of the
+    /// read-modify-write that keeps `sync_dir`, `ignore_patterns` and
+    /// `selective_sync` — which belong to the user, not to the login — intact.
+    pub fn load_or_default() -> Result<Self> {
+        let path = Self::path()?;
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => serde_yaml::from_str(&contents)
+                .with_context(|| format!("invalid config at {}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
+        }
+    }
+
+    /// Precedence is flag > environment > config file > built-in default. The
+    /// flags are handled by the commands that take them, so by the time this
+    /// runs the environment is the highest authority left.
+    fn apply_env(&mut self) {
+        if let Some(url) = env_server_url() {
+            self.server_url = url;
+        }
+        if let Some(token) = env_token() {
+            self.token = token;
+        }
+    }
+
     fn validate(&self) -> Result<()> {
         if self.server_url.is_empty() {
-            bail!("server_url cannot be empty in ~/.nuage.yml");
+            bail!(
+                "no server_url configured — run `nuage login --server https://nuage.example.com`"
+            );
         }
         if self.token.is_empty() {
-            bail!("token cannot be empty in ~/.nuage.yml");
+            bail!("not signed in — run `nuage login`, or set NUAGE_TOKEN");
         }
         if !is_http_url(&self.server_url) {
             bail!(
@@ -89,9 +151,7 @@ impl Config {
         let metadata = match std::fs::metadata(&path) {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(e) => {
-                return Err(e).with_context(|| format!("cannot stat {}", path.display()))
-            }
+            Err(e) => return Err(e).with_context(|| format!("cannot stat {}", path.display())),
         };
 
         if metadata.permissions().mode() & 0o077 == 0 {
@@ -179,6 +239,21 @@ mod tests {
         config.poll_interval = 0;
         let err = config.validate().unwrap_err().to_string();
         assert!(err.contains("poll_interval"));
+    }
+
+    // A login writes two fields and must leave the other four exactly as it
+    // found them, so the parse it round-trips through has to tolerate a file
+    // that is missing the credential it is about to supply.
+    #[test]
+    fn a_partial_file_keeps_the_user_settings_it_does_have() {
+        let parsed: Config = serde_yaml::from_str(
+            "server_url: https://nuage.example.com/api\nsync_dir: ~/Cloud\nselective_sync:\n  - Docs\n",
+        )
+        .unwrap();
+        assert_eq!(parsed.token, "");
+        assert_eq!(parsed.sync_dir, "~/Cloud");
+        assert_eq!(parsed.selective_sync, vec!["Docs".to_string()]);
+        assert_eq!(parsed.poll_interval, default_poll_interval());
     }
 
     #[test]

@@ -4,6 +4,7 @@ mod config;
 mod daemon;
 mod hash;
 mod ignore;
+mod login;
 mod sync;
 
 use anyhow::{bail, Context, Result};
@@ -51,8 +52,10 @@ enum Command {
     Status,
     /// Show daemon logs
     Logs(LogsArgs),
-    /// Interactive login setup
-    Login,
+    /// Sign in to a Nuage server
+    Login(LoginArgs),
+    /// Sign out, clearing the stored token
+    Logout,
     /// Upgrade nuage-cli
     Upgrade,
     /// List files and folders at a remote path
@@ -78,6 +81,17 @@ enum Command {
     /// Manage API tokens
     #[command(subcommand)]
     Token(TokenCommand),
+}
+
+#[derive(clap::Args)]
+struct LoginArgs {
+    #[arg(long, help = "Server URL, with or without the /api suffix")]
+    server: Option<String>,
+    #[arg(
+        long,
+        help = "Paste an API token instead of signing in through the browser"
+    )]
+    token: bool,
 }
 
 #[derive(clap::Args)]
@@ -246,7 +260,8 @@ fn run(cli: Cli) -> Result<()> {
                     None | Some(Command::Watch) => cmd_watch().await,
                     Some(Command::Sync(args)) => cmd_sync(&args).await,
                     Some(Command::Status) => cmd_status().await,
-                    Some(Command::Login) => cmd_login().await,
+                    Some(Command::Login(args)) => login::run(args.server, args.token).await,
+                    Some(Command::Logout) => login::logout(),
                     Some(Command::Upgrade) => cmd_upgrade().await,
                     Some(Command::Ls(args)) => cmd_ls(&args, cli.json).await,
                     Some(Command::Upload(args)) => cmd_upload(&args, cli.json).await,
@@ -1317,64 +1332,6 @@ async fn cmd_status() -> Result<()> {
     Ok(())
 }
 
-async fn cmd_login() -> Result<()> {
-    println!("nuage -- interactive setup\n");
-
-    let server_url = prompt("Server URL")?;
-    if server_url.is_empty() {
-        bail!("server URL cannot be empty");
-    }
-
-    print!("API token: ");
-    io::stdout().flush()?;
-    let token = rpassword::read_password().context("failed to read token")?;
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        bail!("token cannot be empty");
-    }
-
-    let default_dir = "~/Nuage".to_string();
-    let sync_dir_input = prompt_with_default("Sync directory", &default_dir)?;
-    let sync_dir = if sync_dir_input.is_empty() {
-        default_dir
-    } else {
-        sync_dir_input
-    };
-
-    let config = config::Config {
-        server_url: server_url.clone(),
-        token: token.clone(),
-        sync_dir: sync_dir.clone(),
-        poll_interval: 30,
-        ignore_patterns: vec![
-            ".DS_Store".to_string(),
-            "*.tmp".to_string(),
-            ".nuage/".to_string(),
-            "Thumbs.db".to_string(),
-            ".git/".to_string(),
-        ],
-        selective_sync: vec![],
-    };
-
-    println!("\nTesting connection...");
-    let client = api::ApiClient::new(&server_url, &token)?;
-    client.test_connection().await?;
-    println!("connected successfully");
-
-    config.save()?;
-    println!("config saved to ~/.nuage.yml");
-
-    let expanded = shellexpand::tilde(&sync_dir);
-    let sync_path = std::path::PathBuf::from(expanded.as_ref());
-    std::fs::create_dir_all(&sync_path)
-        .with_context(|| format!("cannot create sync directory: {}", sync_path.display()))?;
-    println!("sync directory ready: {}", sync_path.display());
-
-    println!("\nRun `nuage start` to start syncing in the background.");
-    println!("Run `nuage watch` for foreground mode.");
-    Ok(())
-}
-
 /// Upgrades in place. The daemon is stopped first: replacing the executable of a
 /// running process leaves it holding a half-written image, and a daemon left running
 /// through an upgrade would keep serving the old code anyway.
@@ -1412,23 +1369,3 @@ async fn cmd_upgrade() -> Result<()> {
     Ok(())
 }
 
-fn prompt(label: &str) -> Result<String> {
-    print!("{}: ", label);
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    Ok(input.trim().to_string())
-}
-
-fn prompt_with_default(label: &str, default: &str) -> Result<String> {
-    print!("{} [{}]: ", label, default);
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        Ok(default.to_string())
-    } else {
-        Ok(trimmed.to_string())
-    }
-}

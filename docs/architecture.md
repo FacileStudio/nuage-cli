@@ -148,6 +148,14 @@ to `server_url`, whose trailing slash is trimmed.
 | `DELETE` | `/shares/{id}` | Revoke |
 | `GET` `POST` | `/users/me/api-token` | List and create API tokens |
 | `DELETE` | `/users/me/api-token/{id}` | Revoke a token |
+| `GET` | `/auth/config` | Which login flows the instance accepts |
+| `GET` | `/auth/oidc?flow=cli&port=&cli_state=` | Start the browser sign-in |
+| `POST` | `/auth/oidc/exchange` | Trade the one-time code for a token |
+
+The three `/auth` endpoints are served by [porte](https://github.com/FacileStudio/porte), the
+suite's Go auth kit, and are the only ones `nuage` calls without a bearer token. `login.rs`
+uses a plain `reqwest::Client` for them rather than `ApiClient`, which exists to attach
+credentials it does not yet have.
 
 None of these carry an `/api` prefix, but the deployed Nuage sits behind a Traefik router that
 strips one — so `server_url` normally ends in `/api`. See

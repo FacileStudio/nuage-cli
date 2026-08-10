@@ -13,23 +13,69 @@ nuage [--json] [COMMAND]
 machine-readable output; the daemon commands (`start`, `stop`, `restart`, `logs`) accept it
 but ignore it. With no command, `nuage` behaves exactly like `nuage watch`.
 
-Every command except `upgrade` requires a valid `~/.nuage.yml` — see
+Every command except `upgrade`, `login` and `logout` requires a valid `~/.nuage.yml`, or the
+`NUAGE_TOKEN` and `NUAGE_SERVER_URL` variables that override it — see
 [configuration.md](configuration.md).
 
 ## Setup
 
 ### `nuage login`
 
-Interactive setup. Prompts for the server URL, the API token and the sync directory
-(defaulting to `~/Nuage`), tests the connection with `GET /sync/state`, writes
-`~/.nuage.yml`, and creates the sync directory.
+Signs in and writes `server_url` and `token` into `~/.nuage.yml`.
 
 ```sh
 nuage login
+nuage login --server https://nuage.facile.studio
+nuage login --token
 ```
 
-Bails on an empty server URL or an empty token. A failed connection test aborts before
-anything is written.
+| Flag | What it does |
+|---|---|
+| `--server <url>` | The instance. The `/api` suffix is appended if you leave it off |
+| `--token` | Skip the browser and paste an API token instead |
+
+The server URL is resolved flag first, then `NUAGE_SERVER_URL`, then whatever is already in the
+config file, then a prompt.
+
+**The browser flow.** `nuage login` first asks the server what it accepts, with
+`GET <server_url>/auth/config`, which answers `{"sso_only":true,"oidc_enabled":true}` on a
+Facile deployment. When OIDC is enabled the CLI:
+
+1. binds `127.0.0.1:0` and takes the ephemeral port, so two shells can log in at once;
+2. generates a 16-byte nonce from `/dev/urandom`;
+3. opens `<server_url>/auth/oidc?flow=cli&port=<port>&cli_state=<nonce>`;
+4. serves exactly one callback at `http://127.0.0.1:<port>/`, ignoring stray requests such as
+   the browser's unprompted `/favicon.ico`, and **aborts with HTTP 400 if the returned `state`
+   does not match the nonce** — that check is why a nonce is sent at all;
+5. exchanges the one-time `code` (single use, sixty seconds) for a token over
+   `POST <server_url>/auth/oidc/exchange`.
+
+The token never travels in a URL, so it cannot land in browser history, a `Referer` header or a
+proxy log. The wait times out after three minutes.
+
+**The token flow.** Pass `--token` and the CLI prompts for an API token minted in the dashboard
+under Settings then API, reading it without echo. This is the path for a headless machine.
+Login also falls back to it on its own when a browser cannot be opened, unless the instance
+reports `sso_only`, in which case there is nothing to fall back to and it says so.
+
+**What is preserved.** Login is a read-modify-write. Only `server_url` and `token` change;
+`sync_dir`, `poll_interval`, `ignore_patterns` and `selective_sync` are read from the existing
+file and written back as they were. The sync directory and the default ignore list are only
+prompted for and seeded when there is no config file at all.
+
+The connection is tested with `GET /sync/state` before anything is written, so a bad token
+aborts rather than replacing a working one. The file is created at mode `0600`.
+
+### `nuage logout`
+
+```sh
+nuage logout
+```
+
+Blanks `token` and leaves every other key alone, including `server_url` — logging out is not a
+reason to make the user retype where their server is. Running it when already signed out is not
+an error. If `NUAGE_TOKEN` is set in the environment it warns, because that variable outranks
+the file and the user would otherwise still be authenticated.
 
 ### `nuage upgrade`
 

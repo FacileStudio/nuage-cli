@@ -47,7 +47,8 @@ facile install nuage
 ## Usage
 
 ```sh
-nuage login                        # interactive setup, writes ~/.nuage.yml
+nuage login                        # sign in through the browser, writes ~/.nuage.yml
+nuage logout                       # clear the stored token, keep everything else
 nuage start                        # background sync daemon
 nuage status                       # daemon state, last sync, file counts
 nuage sync                         # one-shot bidirectional sync
@@ -57,6 +58,26 @@ nuage share /Documents/report.pdf -e 7d
 ```
 
 Full command reference and flags: [docs/usage.md](docs/usage.md).
+
+## Signing in
+
+`nuage login` asks the server which flows it accepts (`GET /auth/config`) and then opens your
+browser. The CLI listens on an ephemeral loopback port, the server sends the browser back with
+a single-use code valid for sixty seconds, and the CLI exchanges that code for a token. No
+credential is ever typed into the terminal or left in a URL.
+
+```sh
+nuage login --server https://nuage.facile.studio   # the /api suffix is added for you
+nuage login --token                                # paste an API token instead
+nuage logout                                       # clear the token, keep your sync settings
+```
+
+Use `--token` on a machine with no browser: mint a token in the dashboard under Settings then
+API and paste it at the prompt. Login also falls back to it on its own if a browser cannot be
+opened and the instance permits it.
+
+Both commands rewrite only `server_url` and `token`. Your `sync_dir`, `poll_interval`,
+`ignore_patterns` and `selective_sync` are read, kept and written back untouched.
 
 ## Configuration
 
@@ -82,6 +103,14 @@ ignore_patterns:
 | `poll_interval` | Seconds between server polls in the daemon. Defaults to `30` |
 | `ignore_patterns` | Globs excluded from sync. `.nuage/` is always added |
 
+Two environment variables override the file, for CI and for one-off runs against another
+instance. Precedence is flag, then environment, then file, then built-in default.
+
+| Variable | Overrides |
+|---|---|
+| `NUAGE_TOKEN` | `token` |
+| `NUAGE_SERVER_URL` | `server_url` |
+
 Full reference, including `selective_sync` and the on-disk layout:
 [docs/configuration.md](docs/configuration.md).
 
@@ -90,7 +119,8 @@ Full reference, including `selective_sync` and the on-disk layout:
 ```
 src/
   main.rs      clap tree and every subcommand handler
-  config.rs    ~/.nuage.yml loading, validation, saving
+  config.rs    ~/.nuage.yml loading, validation, env overrides, saving
+  login.rs     browser SSO loopback flow, API-token fallback, logout
   api.rs       Nuage REST client and response models
   daemon.rs    PID file, log paths, daemon and terminal logging setup
   hash.rs      buffered SHA-256 file hashing

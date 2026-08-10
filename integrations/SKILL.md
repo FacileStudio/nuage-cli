@@ -56,11 +56,17 @@ nuage token revoke <id>
 
 ### Setup
 ```
-nuage login                    Interactive login
+nuage login [--server <url>]   Sign in through the browser (SSO)
+nuage login --token            Sign in by pasting an API token (headless)
+nuage logout                   Clear the stored token
 nuage upgrade                  Self-upgrade
 ```
 
 ## Rules
+- `nuage login` opens a browser. Never run it unattended — suggest `nuage login --token`, or
+  `NUAGE_TOKEN`, on a machine with no display
+- `NUAGE_TOKEN` and `NUAGE_SERVER_URL` override `~/.nuage.yml`; prefer them over editing the file
+- `login` and `logout` only touch `server_url` and `token`; the user's sync settings survive
 - All file/share/search/token commands support `--json`
 - Daemon commands do NOT support `--json`
 - Confirm before `rm` unless user says `-f`
