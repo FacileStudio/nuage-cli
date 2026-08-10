@@ -34,15 +34,15 @@ upload, download, move, share and search remote files.
 curl -fsSL https://raw.githubusercontent.com/FacileStudio/nuage-cli/main/install.sh | bash
 ```
 
-Installs to `~/.local/bin`. Pass `--bin-dir <dir>` to change that, `--source` to build from
-source, `--no-skill` to skip AI agent skill registration. Building from source needs `cargo`
-and `git` on `PATH`. The AI agent skill is described in [docs/usage.md](docs/usage.md).
+Installs to `~/.local/bin` via [facile](https://github.com/FacileStudio/facile), the suite
+installer. Pass `--bin-dir <dir>` to change that, `--source` to build from source, `--no-skill`
+to skip AI agent skill registration.
+
+Already have `facile`:
 
 ```sh
-cargo install --git https://github.com/FacileStudio/nuage-cli.git --force
+facile install nuage
 ```
-
-Update in place with `nuage upgrade`.
 
 ## Usage
 
