@@ -88,3 +88,65 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
             dist/*.tar.gz dist/checksums.txt
+
+
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Push Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          base="https://github.com/FacileStudio/nuage-cli/releases/download/${GITHUB_REF_NAME}"
+
+          gh release download "$GITHUB_REF_NAME" --pattern 'checksums.txt'
+          sha() { grep "nuage_${version}_$1.tar.gz" checksums.txt | awk '{print $1}'; }
+
+          {
+            echo "class Nuage < Formula"
+            echo "  desc \"Sync daemon and terminal client for Nuage, the self-hosted cloud storage\""
+            echo "  homepage \"https://github.com/FacileStudio/nuage-cli\""
+            echo "  version \"${version}\""
+            echo ""
+            echo "  on_macos do"
+            echo "    if Hardware::CPU.arm?"
+            echo "      url \"${base}/nuage_${version}_darwin_arm64.tar.gz\""
+            echo "      sha256 \"$(sha darwin_arm64)\""
+            echo "    else"
+            echo "      url \"${base}/nuage_${version}_darwin_amd64.tar.gz\""
+            echo "      sha256 \"$(sha darwin_amd64)\""
+            echo "    end"
+            echo "  end"
+            echo ""
+            echo "  on_linux do"
+            echo "    if Hardware::CPU.intel?"
+            echo "      url \"${base}/nuage_${version}_linux_amd64.tar.gz\""
+            echo "      sha256 \"$(sha linux_amd64)\""
+            echo "    else"
+            echo "      url \"${base}/nuage_${version}_linux_arm64.tar.gz\""
+            echo "      sha256 \"$(sha linux_arm64)\""
+            echo "    end"
+            echo "  end"
+            echo ""
+            echo "  def install"
+            echo "    bin.install \"nuage\""
+            echo "  end"
+            echo ""
+            echo "  test do"
+            echo "    system \"#{bin}/nuage\", \"--version\""
+            echo "  end"
+            echo "end"
+          } > formula.rb
+
+          git clone -q https://x-access-token:${GH_TOKEN}@github.com/FacileStudio/homebrew-tap.git tap
+          mkdir -p tap/Formula
+          cp formula.rb "tap/Formula/nuage.rb"
+          cd tap
+          git config user.name goreleaserbot
+          git config user.email bot@goreleaser.com
+          git add "Formula/nuage.rb"
+          git commit -m "nuage ${version}"
+          git push
