@@ -1,0 +1,5 @@
+[tools]
+lefthook = "latest"
+
+[hooks]
+postinstall = "lefthook install"
