@@ -9,9 +9,8 @@
 # is the generic set (`gen.*`) plus the architecture rules, so treat this file
 # as a layout contract with a size budget attached, not as a clippy substitute.
 # `cargo clippy` still owns anything that needs to understand Rust.
-#
-# The limits are the Go family's canonical numbers, kept so one standard covers
-# the suite. They are not picked to make a count go away.
+
+kind: cli
 
 ignore:
   - .git
@@ -22,18 +21,17 @@ ignore:
 
 extensions: [.rs]
 
+# Only four of filet's limits reach a `.rs` file; the rest (funcLines,
+# funcStatements, complexity, structFields, interfaceMethods) are Go-only and
+# are left out rather than pinned to numbers that do nothing. These are filet's
+# own defaults, except funcsPerFile, which is off: filet counts free functions
+# and impl methods alike, so any Rust module with one `impl` blows the budget
+# and the rule says nothing about whether the module does too much.
 limits:
-  fileLines: 300
+  fileLines: 250
   funcsPerFile: 0
-  funcLines: 60
-  funcStatements: 40
   lineLength: 120
-  params: 5
-  returns: 3
-  nesting: 5
-  complexity: 15
-  structFields: 15
-  interfaceMethods: 5
+  nesting: 4
 
 # main.rs is the clap entry point. The sync engine is the only subsystem big
 # enough to own a directory: src/sync/ holds the watcher, the transfer layer,
@@ -46,15 +44,15 @@ architecture:
     "src/sync": [mod.rs, state.rs, transfer.rs, watcher.rs, resolver.rs]
     "docs": [README.md, architecture.md, configuration.md, development.md, usage.md]
 
+# Same story as the limits: requireDocComments, banGlobalMutable and banInit
+# only drive `go.*` rules, so they are left out. These three are the toggles a
+# `.rs` file is actually measured against.
 style:
   banInlineComments: true
   banTODO: true
-  requireDocComments: true
-  banGlobalMutable: true
-  banInit: true
   banTrailingSpace: true
 
 disabled:
-  - gen.line.long
+  - gen.line.long   # rustfmt owns line width
 
 failOn: error
