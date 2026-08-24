@@ -1,0 +1,60 @@
+# nuage-cli's coding standard, enforced by filet.
+# https://github.com/FacileStudio/filet
+#
+#   filet check .     the rules
+#   filet roast .     the rules, with commentary
+#   filet test .      the cargo suite
+#
+# filet has no Rust-specific rule family the way it has `go.*`. What runs here
+# is the generic set (`gen.*`) plus the architecture rules, so treat this file
+# as a layout contract with a size budget attached, not as a clippy substitute.
+# `cargo clippy` still owns anything that needs to understand Rust.
+#
+# The limits are the Go family's canonical numbers, kept so one standard covers
+# the suite. They are not picked to make a count go away.
+
+ignore:
+  - .git
+  - target
+  - dist
+  - build
+  - coverage
+
+extensions: [.rs]
+
+limits:
+  fileLines: 300
+  funcsPerFile: 0
+  funcLines: 60
+  funcStatements: 40
+  lineLength: 120
+  params: 5
+  returns: 3
+  nesting: 5
+  complexity: 15
+  structFields: 15
+  interfaceMethods: 5
+
+# main.rs is the clap entry point. The sync engine is the only subsystem big
+# enough to own a directory: src/sync/ holds the watcher, the transfer layer,
+# the conflict resolver and the on-disk state. Everything the daemon and the
+# one-shot commands share sits flat beside main.rs.
+architecture:
+  requiredDirs: [src, src/sync, docs]
+  requiredFiles:
+    "src": [main.rs, api.rs, config.rs, ui.rs, daemon.rs]
+    "src/sync": [mod.rs, state.rs, transfer.rs, watcher.rs, resolver.rs]
+    "docs": [README.md, architecture.md, configuration.md, development.md, usage.md]
+
+style:
+  banInlineComments: true
+  banTODO: true
+  requireDocComments: true
+  banGlobalMutable: true
+  banInit: true
+  banTrailingSpace: true
+
+disabled:
+  - gen.line.long
+
+failOn: error
