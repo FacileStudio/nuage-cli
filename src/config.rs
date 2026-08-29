@@ -26,9 +26,23 @@ pub fn env_server_url() -> Option<String> {
 /// The space, when the environment supplies one.
 ///
 /// An id rather than a name, because resolving a name costs a round-trip and
-/// the environment channel exists for CI, which has an id to hand.
-pub fn env_space() -> Option<i64> {
-    non_empty("NUAGE_SPACE")?.parse().ok()
+/// the environment channel exists for CI, which has an id to hand. A name is
+/// refused rather than ignored: `--space` takes one, so a reader who assumes
+/// this does too would otherwise get the personal space and no hint why.
+pub fn env_space() -> Result<Option<i64>> {
+    match non_empty("NUAGE_SPACE") {
+        Some(raw) => parse_space(&raw).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn parse_space(raw: &str) -> Result<i64> {
+    match raw.parse::<i64>() {
+        Ok(id) => Ok(id),
+        Err(_) => bail!(
+            "NUAGE_SPACE must be a space id, not a name (got `{raw}`) — `nuage spaces list` prints the ids"
+        ),
+    }
 }
 
 fn non_empty(key: &str) -> Option<String> {
@@ -86,7 +100,7 @@ impl Config {
 
     pub fn load() -> Result<Self> {
         let mut config = Self::load_or_default()?;
-        config.apply_env();
+        config.apply_env()?;
         config.validate()?;
         Ok(config)
     }
@@ -112,16 +126,17 @@ impl Config {
     /// Precedence is flag > environment > config file > built-in default. The
     /// flags are handled by the commands that take them, so by the time this
     /// runs the environment is the highest authority left.
-    fn apply_env(&mut self) {
+    fn apply_env(&mut self) -> Result<()> {
         if let Some(url) = env_server_url() {
             self.server_url = url;
         }
         if let Some(token) = env_token() {
             self.token = token;
         }
-        if let Some(space) = env_space() {
+        if let Some(space) = env_space()? {
             self.space = Some(space);
         }
+        Ok(())
     }
 
     fn validate(&self) -> Result<()> {
@@ -286,6 +301,19 @@ mod tests {
         let mut selected = sample();
         selected.space = Some(7);
         assert!(serde_yaml::to_string(&selected).unwrap().contains("space: 7"));
+    }
+
+    // A name in NUAGE_SPACE used to parse to None and leave the caller in the
+    // personal space with nothing said, while `--space` accepted the same name.
+    // Parsing is tested apart from the variable because the environment is
+    // process-global and these tests run in parallel.
+    #[test]
+    fn a_name_where_a_space_id_belongs_is_refused_not_ignored() {
+        assert_eq!(parse_space("7").unwrap(), 7);
+
+        let err = parse_space("FacileShared").unwrap_err().to_string();
+        assert!(err.contains("must be a space id"), "{err}");
+        assert!(err.contains("FacileShared"), "{err}");
     }
 
     #[test]
