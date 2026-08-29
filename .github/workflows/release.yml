@@ -102,7 +102,9 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           base="https://github.com/FacileStudio/nuage-cli/releases/download/${GITHUB_REF_NAME}"
 
-          gh release download "$GITHUB_REF_NAME" --pattern 'checksums.txt'
+          gh release download "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'checksums.txt'
           sha() { grep "nuage_${version}_$1.tar.gz" checksums.txt | awk '{print $1}'; }
 
           {
