@@ -63,7 +63,7 @@ Config lives at `~/.nuage.yml` -- see `config.example.yaml` for the format.
 `share`, `unshare`, `shares` -- share link management  
 `search` -- search files/folders  
 `token create|list|revoke` -- API token management  
-`spaces list|use` -- list spaces, or select the one commands act on  
+`spaces list|use` -- list spaces, or select the one commands act on (`personal` for the account's own files)  
 
 All subcommands support `--json` for machine-readable output.
 
@@ -84,3 +84,4 @@ All subcommands support `--json` for machine-readable output.
 - The API client sends an `Origin` header to avoid CSRF 403 errors on multipart uploads.
 - Upload supports stdin piping (`-` as source path).
 - The daemon writes a PID file for process management; check `daemon.rs` for the PID file path.
+- The personal space has no id and the server never lists it. `PERSONAL` in `main.rs` is the only name it has: `spaces list` prints its row itself, and `SpaceFlag::Personal` is how `--space personal` outranks the config where a plain `None` would have deferred to it.

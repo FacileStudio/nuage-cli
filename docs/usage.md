@@ -10,8 +10,8 @@ nuage [--json] [--space NAME_OR_ID] [COMMAND]
 ```
 
 `--space` is a global flag. It overrides the selected space for one invocation and takes a
-name or an id; a name costs one extra request to resolve. See
-[Spaces](#spaces) for what a space changes.
+name or an id; a name costs one extra request to resolve, except `personal`, which the CLI
+answers itself. See [Spaces](#spaces) for what a space changes.
 
 `--json` is a global flag. It switches the file, share, search and token commands to
 machine-readable output; the daemon commands (`start`, `stop`, `restart`, `logs`) accept it
@@ -180,6 +180,12 @@ personal space, so a folder living only in a shared space is invisible: `nuage l
 lists the personal `Clients` and `nuage ls /Clients/DMS` reports `not found` even when the
 shared space has it.
 
+**The personal space is named `personal`**, matched case-insensitively, and it works anywhere a
+space can be named: `nuage spaces use personal`, `nuage --space personal ls /`, and the `known:`
+list in the error for a name that does not exist. The server never returns it from
+`GET /spaces`, because it is the absence of a space rather than one of them, so the CLI supplies
+the name itself. `NUAGE_SPACE` is the one exception: it takes an id and nothing else.
+
 ### `nuage spaces list`
 
 ```sh
@@ -187,22 +193,43 @@ nuage spaces list
 ```
 
 ```
-* 1    FacileShared             owner
+* -    personal                 your own files
+  1    FacileShared             owner
 ```
 
-The `*` marks the current selection. `--json` gives `id`, `name`, `description` and your
-`role`.
+`personal` is always the first row, with `-` where a real space prints its id. The `*` marks the
+current selection, and it sits on `personal` when nothing is selected.
+
+`--json` prints an object rather than the bare array it printed in 0.4.0:
+
+```json
+{"selected":null,"spaces":[{"id":1,"name":"FacileShared","description":"","role":"owner"}]}
+```
+
+`selected` is the space id in force for this run, or `null` for the personal space, so the
+machine output answers the same question the `*` does. `spaces` is what the server returned:
+`id`, `name`, `description` and your `role`. The personal space is not in that array, since it
+has no id to report.
 
 ### `nuage spaces use`
 
 ```sh
 nuage spaces use <name-or-id>
+nuage spaces use personal
 nuage spaces use --none
 ```
 
 Writes `space` to `~/.nuage.yml` and leaves every other key alone. A name is matched
 case-insensitively and resolved to an id, so a later rename does not strand the config.
-`--none` clears it and goes back to the personal space.
+`personal` removes the key and goes back to your own files; `--none` is an alias for it, kept
+from 0.4.0 when it was the only way back.
+
+`--json` prints `{"selected":<id|null>}`, replacing the `{"space":<id|null>}` of 0.4.0 so that
+both `spaces` subcommands name the field the same way.
+
+The write is a read-modify-write against the file itself, not against the config the rest of the
+run uses, so a `NUAGE_TOKEN` or `NUAGE_SERVER_URL` exported for this one command is not written
+into `~/.nuage.yml` as if you had typed it there.
 
 ### What a space does not change
 

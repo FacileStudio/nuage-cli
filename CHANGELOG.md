@@ -11,6 +11,46 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-29
+
+### Added
+
+- `personal` names the account's own files wherever a space can be named:
+  `nuage spaces use personal` and `nuage --space personal <command>`, matched
+  case-insensitively. `--none` is kept as an alias for it.
+- `nuage spaces list` always prints a `personal` row, with `-` where a real
+  space prints its id, and the `*` selection marker sits on that row when no
+  space is selected.
+
+### Changed
+
+- **Breaking:** `nuage spaces list --json` prints
+  `{"selected": <id|null>, "spaces": [...]}` instead of a bare array of spaces.
+  `selected` answers the question the `*` answers in the human output, which the
+  array had no room for. A script reading the old output reads `.spaces` now.
+- **Breaking:** `nuage spaces use --json` prints `{"selected": <id|null>}`
+  instead of `{"space": <id|null>}`, so both `spaces` subcommands name the field
+  the same way.
+- Selecting a space now points at `nuage spaces use personal` for the way back.
+  The standing note about the sync daemon syncing every space is documented
+  rather than printed after every selection.
+
+### Fixed
+
+- The personal space was invisible and unnameable. `nuage spaces list` showed
+  only the shared spaces, so someone who had switched away had nothing telling
+  them a personal one existed; `nuage spaces use personal` failed with
+  ``no space named `personal` — known: FacileShared``; and `--none`, mentioned
+  nowhere but `--help`, was the only way back. It is now a listed row, an
+  accepted name, and one of the names that error prints.
+- `nuage spaces use` no longer writes a `NUAGE_TOKEN` or `NUAGE_SERVER_URL` set
+  for a single run into `~/.nuage.yml` as if it had been typed there. It reads
+  the file the way `login` already did, unvalidated and without the environment
+  overrides applied, so the command changes `space` and nothing else.
+- The `spaces use` positional argument no longer shares the clap id `space` with
+  the global `--space` flag, which is a collision waiting to be tripped over.
+  Nothing user-visible moved except the help text, now `<NAME_OR_ID>`.
+
 ## [0.4.0] — 2026-08-29
 
 ### Added
@@ -81,7 +121,8 @@ tag is v0.2.0; everything before it is folded into that entry.
   them.
 - The daemon guards against PID 0 and stops creating a directory twice.
 
-[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/FacileStudio/nuage-cli/releases/tag/v0.2.0

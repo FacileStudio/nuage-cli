@@ -31,7 +31,7 @@ selective_sync: []
 | `poll_interval` | no | `30` | Seconds between server polls in the sync loop |
 | `ignore_patterns` | no | `[]` | Globs excluded from sync |
 | `selective_sync` | no | `[]` | Path prefixes to sync. Empty means everything |
-| `space` | no | absent | Space id the commands act on. Absent means the personal space. Omitted from the file until you select one |
+| `space` | no | absent | Space id the commands act on. Absent means the personal space. Omitted from the file until you select one, and removed again by `nuage spaces use personal` |
 
 Validation runs at load, after the environment overrides below are applied: malformed YAML, an
 empty `server_url` or an empty `token` all fail before anything touches the network. A missing
@@ -39,8 +39,10 @@ file is not itself an error — it validates as empty, and fails only if the env
 supply what it lacks, which is what lets `NUAGE_TOKEN` and `NUAGE_SERVER_URL` work on a machine
 that has never run `nuage login`.
 
-`nuage login` and `nuage logout` read this file through a path that skips validation, so they
-still work when the field they are about to write is the missing one.
+`nuage login`, `nuage logout` and `nuage spaces use` read this file through a path that skips
+both validation and the environment overrides. That is what lets them work when the field they
+are about to write is the missing one, and it is why a `NUAGE_TOKEN` or `NUAGE_SERVER_URL`
+exported for a single run is not written into the file as if it had been typed there.
 
 ## The `/api` suffix
 
@@ -86,7 +88,7 @@ prints the active list.
 |---|---|---|
 | `NUAGE_TOKEN` | `token` | Blank or unset is ignored, so exporting an empty string does not lock you out |
 | `NUAGE_SERVER_URL` | `server_url` | Taken verbatim; unlike `--server` it is not given an `/api` suffix |
-| `NUAGE_SPACE` | `space` | An id, not a name. Resolving a name costs a request, and CI has the id to hand |
+| `NUAGE_SPACE` | `space` | An id, not a name, and not `personal` either: a non-numeric value is ignored and the config file stands. Resolving a name costs a request, and CI has the id to hand |
 
 Precedence is **flag, then environment, then config file, then built-in default**, applied at
 load. Both variables are read on every command, and either one is enough on its own — with both
@@ -143,4 +145,5 @@ already have one. `nuage token revoke <id>` invalidates one.
 | `GET /sync/state failed (401): ...` | Wrong or revoked token |
 | `GET /sync/state failed (404): ...` | `server_url` is missing the `/api` suffix |
 | `cannot create sync directory: ...` | `sync_dir` is not writable |
+| ``no space named `x` — known: personal, ...`` | `--space` or `spaces use` was given a name no space answers to. `personal` is always one of the names it accepts |
 | `[nuage] already running (PID n)` | A daemon is already up; use `restart` |
