@@ -23,6 +23,14 @@ pub fn env_server_url() -> Option<String> {
     non_empty("NUAGE_SERVER_URL")
 }
 
+/// The space, when the environment supplies one.
+///
+/// An id rather than a name, because resolving a name costs a round-trip and
+/// the environment channel exists for CI, which has an id to hand.
+pub fn env_space() -> Option<i64> {
+    non_empty("NUAGE_SPACE")?.parse().ok()
+}
+
 fn non_empty(key: &str) -> Option<String> {
     let value = std::env::var(key).ok()?;
     let trimmed = value.trim();
@@ -46,6 +54,12 @@ pub struct Config {
     pub ignore_patterns: Vec<String>,
     #[serde(default)]
     pub selective_sync: Vec<String>,
+    /// The space every request is scoped to, or the personal one when absent.
+    ///
+    /// Written by `nuage spaces use`, and skipped on serialize so a config that
+    /// never selected one keeps the shape it already had.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<i64>,
 }
 
 /// A config nobody has written yet: the same field values the serde defaults
@@ -59,6 +73,7 @@ impl Default for Config {
             poll_interval: default_poll_interval(),
             ignore_patterns: Vec::new(),
             selective_sync: Vec::new(),
+            space: None,
         }
     }
 }
@@ -103,6 +118,9 @@ impl Config {
         }
         if let Some(token) = env_token() {
             self.token = token;
+        }
+        if let Some(space) = env_space() {
+            self.space = Some(space);
         }
     }
 
@@ -217,6 +235,7 @@ mod tests {
             poll_interval: default_poll_interval(),
             ignore_patterns: vec![],
             selective_sync: vec![],
+            space: None,
         }
     }
 
@@ -254,6 +273,19 @@ mod tests {
         assert_eq!(parsed.sync_dir, "~/Cloud");
         assert_eq!(parsed.selective_sync, vec!["Docs".to_string()]);
         assert_eq!(parsed.poll_interval, default_poll_interval());
+        assert_eq!(parsed.space, None);
+    }
+
+    // A config that never selected a space must not grow the key on the next
+    // write, or every login would start rewriting files it did not change.
+    #[test]
+    fn an_unselected_space_is_absent_from_the_written_file() {
+        let yaml = serde_yaml::to_string(&sample()).unwrap();
+        assert!(!yaml.contains("space"));
+
+        let mut selected = sample();
+        selected.space = Some(7);
+        assert!(serde_yaml::to_string(&selected).unwrap().contains("space: 7"));
     }
 
     #[test]

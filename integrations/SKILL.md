@@ -54,6 +54,13 @@ nuage token list
 nuage token revoke <id>
 ```
 
+### Spaces
+```
+nuage spaces list              List spaces available to this account
+nuage spaces use <name-or-id>  Select the space every command acts on
+nuage spaces use --none        Go back to the personal space
+```
+
 ### Setup
 ```
 nuage login [--server <url>]   Sign in through the browser (SSO)
@@ -65,7 +72,13 @@ nuage upgrade                  Self-upgrade
 ## Rules
 - `nuage login` opens a browser. Never run it unattended — suggest `nuage login --token`, or
   `NUAGE_TOKEN`, on a machine with no display
-- `NUAGE_TOKEN` and `NUAGE_SERVER_URL` override `~/.nuage.yml`; prefer them over editing the file
+- `NUAGE_TOKEN`, `NUAGE_SERVER_URL` and `NUAGE_SPACE` override `~/.nuage.yml`; prefer them over
+  editing the file
+- Every command answers from **one space**, the personal one unless a space is selected. A path
+  that exists only in a shared space reports `not found` until you pass `--space <name-or-id>`
+  or run `nuage spaces use`. `--space` is global and accepts a name or an id
+- The sync daemon is deliberately not scoped by the selection: it syncs every visible space into
+  one `sync_dir`
 - `login` and `logout` only touch `server_url` and `token`; the user's sync settings survive
 - All file/share/search/token commands support `--json`
 - Daemon commands do NOT support `--json`

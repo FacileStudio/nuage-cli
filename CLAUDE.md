@@ -22,7 +22,7 @@ cargo build --release        # release build (stripped, LTO)
 cargo run                    # run the CLI (default: start daemon)
 cargo run -- <subcommand>    # run a specific subcommand
 cargo clippy                 # lint (no custom clippy config)
-cargo test                   # no tests yet
+cargo test                   # unit tests, in-module
 ```
 
 The binary is named `nuage` (configured in `[[bin]]` in Cargo.toml).
@@ -63,13 +63,14 @@ Config lives at `~/.nuage.yml` -- see `config.example.yaml` for the format.
 `share`, `unshare`, `shares` -- share link management  
 `search` -- search files/folders  
 `token create|list|revoke` -- API token management  
+`spaces list|use` -- list spaces, or select the one commands act on  
 
 All subcommands support `--json` for machine-readable output.
 
 ## Conventions
 
 - No inline comments in code.
-- No test suite exists yet.
+- Unit tests live in `#[cfg(test)]` modules beside the code they cover; there are no integration tests.
 - No rustfmt, clippy, or toolchain config files -- uses Rust defaults.
 - Commit messages are lowercase, imperative, and descriptive (e.g., "fix sync always uploading untracked local files").
 - `main.rs` is large (~900+ lines) -- contains all subcommand handler logic alongside arg definitions.

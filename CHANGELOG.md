@@ -11,6 +11,30 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-29
+
+### Added
+
+- `nuage spaces list` and `nuage spaces use <name-or-id>`, plus a global
+  `--space` flag and a `NUAGE_SPACE` variable, so commands can act on a shared
+  space instead of your personal one. `spaces use --none` goes back.
+- `space` in `~/.nuage.yml`, written by `spaces use` and absent until you
+  select one.
+- `nuage status` reports the selected space.
+
+### Fixed
+
+- Commands no longer answer from the personal space alone. Every request now
+  carries the selected `space_id`, which is what made a folder living only in a
+  shared space report `not found` — and made uploading into one fail with
+  `POST /files (404): folder not found` on every sync pass, visible only in
+  `nuage logs`.
+
+### Changed
+
+- `ApiFile` and `ApiFolder` keep the `space_id` the server already sent and the
+  client used to discard, so it now appears in `--json` output.
+
 ## [0.3.0] — 2026-08-10
 
 ### Added
@@ -57,6 +81,7 @@ tag is v0.2.0; everything before it is folded into that entry.
   them.
 - The daemon guards against PID 0 and stops creating a directory twice.
 
-[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/FacileStudio/nuage-cli/releases/tag/v0.2.0

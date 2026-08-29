@@ -81,7 +81,7 @@ pub async fn run(server: Option<String>, force_token: bool) -> Result<()> {
     }
 
     ui::step("Testing the connection");
-    let client = ApiClient::new(&config.server_url, &config.token)?;
+    let client = ApiClient::new(&config.server_url, &config.token, config.space)?;
     client.test_connection().await?;
 
     config.save()?;
