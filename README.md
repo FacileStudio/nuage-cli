@@ -113,7 +113,7 @@ instance. Precedence is flag, then environment, then file, then built-in default
 |---|---|
 | `NUAGE_TOKEN` | `token` |
 | `NUAGE_SERVER_URL` | `server_url` |
-| `NUAGE_SPACE` | `space`, as an id. A name, `personal` included, is ignored here |
+| `NUAGE_SPACE` | `space`, as an id. A name, `personal` included, is refused rather than ignored |
 
 Full reference, including `selective_sync` and the on-disk layout:
 [docs/configuration.md](docs/configuration.md).

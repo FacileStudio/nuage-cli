@@ -301,8 +301,36 @@ enum SpaceFlag {
 /// caller reads the answer.
 static SPACE_OVERRIDE: OnceLock<SpaceFlag> = OnceLock::new();
 
+/// Commands that never consult the selected space.
+///
+/// Refused rather than ignored: `nuage --space Shared sync` reads as scoping
+/// the sync and cannot, and a flag a command accepts and discards is worse than
+/// one it rejects.
+fn ignores_space(command: &Option<Command>) -> bool {
+    matches!(
+        command,
+        None | Some(
+            Command::Start
+                | Command::Stop
+                | Command::Restart
+                | Command::Logs(_)
+                | Command::Sync(_)
+                | Command::Watch
+                | Command::Login(_)
+                | Command::Logout
+                | Command::Upgrade
+        )
+    )
+}
+
 fn run(cli: Cli) -> Result<()> {
     let space_flag = cli.space.clone();
+
+    if space_flag.is_some() && ignores_space(&cli.command) {
+        bail!(
+            "`--space` does not apply to this command. It scopes the file, share and search commands; the sync daemon syncs every space into one directory."
+        );
+    }
 
     match cli.command {
         Some(Command::Start) => cmd_start(),

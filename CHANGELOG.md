@@ -24,6 +24,14 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ### Changed
 
+- **Breaking:** `--space` is refused on the commands that never consulted it,
+  rather than accepted and discarded. `nuage --space Shared sync` reads as
+  scoping the sync and never could: the daemon syncs every space into one
+  directory. It still applies to the file, share and search commands.
+- **Breaking:** a non-numeric `NUAGE_SPACE` is refused with a message naming the
+  value, where it used to parse to nothing and leave the caller in the personal
+  space with no indication why. `--space` takes a name, so assuming the variable
+  does too was the obvious mistake to make.
 - **Breaking:** `nuage spaces list --json` prints
   `{"selected": <id|null>, "spaces": [...]}` instead of a bare array of spaces.
   `selected` answers the question the `*` answers in the human output, which the

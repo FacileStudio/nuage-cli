@@ -88,7 +88,7 @@ prints the active list.
 |---|---|---|
 | `NUAGE_TOKEN` | `token` | Blank or unset is ignored, so exporting an empty string does not lock you out |
 | `NUAGE_SERVER_URL` | `server_url` | Taken verbatim; unlike `--server` it is not given an `/api` suffix |
-| `NUAGE_SPACE` | `space` | An id, not a name, and not `personal` either: a non-numeric value is ignored and the config file stands. Resolving a name costs a request, and CI has the id to hand |
+| `NUAGE_SPACE` | `space` | An id, not a name, and not `personal` either. A non-numeric value is refused with a message naming it, rather than silently leaving you in the personal space. Resolving a name costs a request, and CI has the id to hand |
 
 Precedence is **flag, then environment, then config file, then built-in default**, applied at
 load. Both variables are read on every command, and either one is enough on its own — with both
