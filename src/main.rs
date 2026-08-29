@@ -13,6 +13,7 @@ use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 use std::io::{self, IsTerminal, Read, Write};
+use std::sync::OnceLock;
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 
@@ -31,6 +32,14 @@ struct Cli {
 
     #[arg(long, global = true, help = "Disable colored output")]
     no_color: bool,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "NAME_OR_ID",
+        help = "Act on this space instead of the selected one"
+    )]
+    space: Option<String>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -56,6 +65,9 @@ enum Command {
     Login(LoginArgs),
     /// Sign out, clearing the stored token
     Logout,
+    /// List spaces, or select the one this machine works in
+    #[command(subcommand)]
+    Spaces(SpacesCommand),
     /// Upgrade nuage-cli
     Upgrade,
     /// List files and folders at a remote path
@@ -204,6 +216,25 @@ enum TokenCommand {
     Revoke(TokenRevokeArgs),
 }
 
+#[derive(Subcommand)]
+enum SpacesCommand {
+    /// List spaces available to this account
+    List,
+    /// Select the space every command works in
+    Use(SpacesUseArgs),
+}
+
+#[derive(clap::Args)]
+struct SpacesUseArgs {
+    /// Space name or id
+    #[arg(required_unless_present = "none")]
+    space: Option<String>,
+
+    /// Clear the selection and go back to the personal space
+    #[arg(long)]
+    none: bool,
+}
+
 #[derive(clap::Args)]
 struct TokenCreateArgs {
     /// Token name
@@ -242,7 +273,15 @@ fn main() {
     }
 }
 
+/// The `--space` flag, resolved to an id once per run.
+///
+/// Resolving a name costs a request, and `load_api` is called from twenty
+/// synchronous places, so the lookup happens once in `run` and every later
+/// caller reads the answer.
+static SPACE_OVERRIDE: OnceLock<Option<i64>> = OnceLock::new();
+
 fn run(cli: Cli) -> Result<()> {
+    let space_flag = cli.space.clone();
 
     match cli.command {
         Some(Command::Start) => cmd_start(),
@@ -256,6 +295,10 @@ fn run(cli: Cli) -> Result<()> {
                 .context("failed to create async runtime")?;
 
             rt.block_on(async {
+                SPACE_OVERRIDE
+                    .set(resolve_space_flag(space_flag.as_deref()).await?)
+                    .ok();
+
                 match other {
                     None | Some(Command::Watch) => cmd_watch().await,
                     Some(Command::Sync(args)) => cmd_sync(&args).await,
@@ -273,6 +316,7 @@ fn run(cli: Cli) -> Result<()> {
                     Some(Command::Unshare(args)) => cmd_unshare(&args, cli.json).await,
                     Some(Command::Shares) => cmd_shares(cli.json).await,
                     Some(Command::Search(args)) => cmd_search(&args, cli.json).await,
+                    Some(Command::Spaces(sub)) => cmd_spaces(sub, cli.json).await,
                     Some(Command::Token(sub)) => cmd_token(sub, cli.json).await,
                     _ => unreachable!(),
                 }
@@ -281,11 +325,64 @@ fn run(cli: Cli) -> Result<()> {
     }
 }
 
-fn load_api() -> Result<ApiClient> {
+/// Turns a `--space` value into an id, hitting the server only for a name.
+///
+/// An id is the common case and costs nothing; a name costs one request, which
+/// is the price of not having to look the number up by hand.
+async fn resolve_space_flag(flag: Option<&str>) -> Result<Option<i64>> {
+    let raw = match flag {
+        Some(v) => v.trim(),
+        None => return Ok(None),
+    };
+
+    if let Ok(id) = raw.parse::<i64>() {
+        return Ok(Some(id));
+    }
+
     let config = config::Config::load()?;
-    ApiClient::new(&config.server_url, &config.token)
+    let api = ApiClient::new(&config.server_url, &config.token, None)?;
+    Ok(Some(resolve_space_name(&api, raw).await?))
 }
 
+/// Matches a space by name, case-insensitively.
+async fn resolve_space_name(api: &ApiClient, name: &str) -> Result<i64> {
+    let spaces = api.list_spaces().await?;
+    let wanted = name.to_lowercase();
+
+    match spaces.iter().find(|s| s.name.to_lowercase() == wanted) {
+        Some(space) => Ok(space.id),
+        None if spaces.is_empty() => {
+            bail!("no space named `{name}` — this account belongs to none")
+        }
+        None => {
+            let known: Vec<&str> = spaces.iter().map(|s| s.name.as_str()).collect();
+            bail!("no space named `{name}` — known: {}", known.join(", "))
+        }
+    }
+}
+
+/// The space every request is scoped to: the flag when given, the config
+/// otherwise, and the personal space when neither names one.
+fn selected_space(config: &config::Config) -> Option<i64> {
+    SPACE_OVERRIDE
+        .get()
+        .copied()
+        .flatten()
+        .or(config.space)
+}
+
+fn load_api() -> Result<ApiClient> {
+    let config = config::Config::load()?;
+    let space = selected_space(&config);
+    ApiClient::new(&config.server_url, &config.token, space)
+}
+
+/// Builds the sync engine, deliberately unscoped.
+///
+/// `sync/state` without a space returns every space's tree, which is the merged
+/// view `~/Nuage` already holds. Narrowing it would strand the files of every
+/// other space in a directory the engine no longer tracks, so per-space sync
+/// needs its own sync directory and its own change.
 fn build_engine() -> Result<sync::SyncEngine> {
     let config = config::Config::load()?;
     let sync_dir = config.sync_dir_expanded()?;
@@ -293,7 +390,7 @@ fn build_engine() -> Result<sync::SyncEngine> {
     std::fs::create_dir_all(&sync_dir)
         .with_context(|| format!("cannot create sync directory: {}", sync_dir.display()))?;
 
-    let api_client = api::ApiClient::new(&config.server_url, &config.token)?;
+    let api_client = api::ApiClient::new(&config.server_url, &config.token, None)?;
     let state = sync::state::SyncState::new(&sync_dir)?;
     let ignore = ignore::IgnoreRules::new(config.ignore_patterns.clone());
 
@@ -847,6 +944,80 @@ async fn cmd_unshare(args: &UnshareArgs, json: bool) -> Result<()> {
     Ok(())
 }
 
+async fn cmd_spaces(sub: SpacesCommand, json: bool) -> Result<()> {
+    match sub {
+        SpacesCommand::List => cmd_spaces_list(json).await,
+        SpacesCommand::Use(args) => cmd_spaces_use(&args, json).await,
+    }
+}
+
+async fn cmd_spaces_list(json: bool) -> Result<()> {
+    let config = config::Config::load()?;
+    let api = ApiClient::new(&config.server_url, &config.token, None)?;
+    let spaces = api.list_spaces().await?;
+
+    if json {
+        println!("{}", serde_json::to_string(&spaces)?);
+        return Ok(());
+    }
+
+    if spaces.is_empty() {
+        ui::step("No spaces — everything lives in your personal space");
+        return Ok(());
+    }
+
+    let selected = selected_space(&config);
+    for space in &spaces {
+        let marker = if Some(space.id) == selected { "*" } else { " " };
+        println!(
+            "{} {:<4} {:<24} {}",
+            marker,
+            space.id,
+            space.name,
+            ui::dim(&space.role)
+        );
+    }
+
+    if selected.is_none() {
+        ui::hint("none selected — commands act on your personal space");
+    }
+
+    Ok(())
+}
+
+async fn cmd_spaces_use(args: &SpacesUseArgs, json: bool) -> Result<()> {
+    let mut config = config::Config::load()?;
+
+    let chosen = if args.none {
+        None
+    } else {
+        let raw = args
+            .space
+            .as_deref()
+            .expect("clap requires a space unless --none");
+        let api = ApiClient::new(&config.server_url, &config.token, None)?;
+        Some(match raw.trim().parse::<i64>() {
+            Ok(id) => id,
+            Err(_) => resolve_space_name(&api, raw.trim()).await?,
+        })
+    };
+
+    config.space = chosen;
+    config.save()?;
+
+    if json {
+        println!("{}", serde_json::json!({ "space": chosen }));
+        return Ok(());
+    }
+
+    match chosen {
+        Some(id) => ui::success(&format!("Now working in space {id}")),
+        None => ui::success("Cleared — back to your personal space"),
+    }
+    ui::hint("file commands follow this; the sync daemon still syncs every space");
+    Ok(())
+}
+
 async fn cmd_shares(json: bool) -> Result<()> {
     let api = load_api()?;
     let shares = api.list_shares().await?;
@@ -1278,6 +1449,14 @@ fn report_warnings(report: &sync::SyncReport) {
     }
 }
 
+/// How `status` names the current space, without spending a request on it.
+fn describe_space(config: &config::Config) -> String {
+    match selected_space(config) {
+        Some(id) => format!("{id}"),
+        None => "personal".to_string(),
+    }
+}
+
 async fn cmd_status() -> Result<()> {
     match daemon::is_running()? {
         Some(pid) => {
@@ -1295,6 +1474,7 @@ async fn cmd_status() -> Result<()> {
 
     if !sync_dir.join(".nuage").join("state.db").exists() {
         println!("Server: {}", config.server_url);
+        println!("Space: {}", describe_space(&config));
         println!("Sync dir: {}", sync_dir.display());
         println!("Last sync: never");
         println!("Files: 0");
@@ -1308,6 +1488,7 @@ async fn cmd_status() -> Result<()> {
     let folder_count = state.folder_count()?;
 
     println!("Server: {}", config.server_url);
+    println!("Space: {}", describe_space(&config));
     println!("Sync dir: {}", sync_dir.display());
     println!("Last sync: {}", cursor);
     println!("Files: {}", file_count);

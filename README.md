@@ -102,6 +102,7 @@ ignore_patterns:
 | `sync_dir` | Local directory to keep in sync. `~` is expanded. Defaults to `~/Nuage` |
 | `poll_interval` | Seconds between server polls in the daemon. Defaults to `30` |
 | `ignore_patterns` | Globs excluded from sync. `.nuage/` is always added |
+| `space` | Space the commands act on. Absent means your personal space. Written by `nuage spaces use` |
 
 Two environment variables override the file, for CI and for one-off runs against another
 instance. Precedence is flag, then environment, then file, then built-in default.
@@ -110,6 +111,7 @@ instance. Precedence is flag, then environment, then file, then built-in default
 |---|---|
 | `NUAGE_TOKEN` | `token` |
 | `NUAGE_SERVER_URL` | `server_url` |
+| `NUAGE_SPACE` | `space`, as an id |
 
 Full reference, including `selective_sync` and the on-disk layout:
 [docs/configuration.md](docs/configuration.md).

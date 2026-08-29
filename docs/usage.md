@@ -6,8 +6,12 @@ tokens, and the AI agent skill.
 ## Synopsis
 
 ```sh
-nuage [--json] [COMMAND]
+nuage [--json] [--space NAME_OR_ID] [COMMAND]
 ```
+
+`--space` is a global flag. It overrides the selected space for one invocation and takes a
+name or an id; a name costs one extra request to resolve. See
+[Spaces](#spaces) for what a space changes.
 
 `--json` is a global flag. It switches the file, share, search and token commands to
 machine-readable output; the daemon commands (`start`, `stop`, `restart`, `logs`) accept it
@@ -157,14 +161,55 @@ nuage status
 ```
 Daemon: running (PID 41233)
 Server: https://nuage.facile.studio/api
+Space: personal
 Sync dir: /Users/you/Nuage
 Last sync: 2026-08-05T14:02:11Z
 Files: 318
 Folders: 44
 ```
 
-`Last sync` is the stored cursor, or `never`. With no state database yet it reports zero files
-and folders. A non-empty `selective_sync` is listed on an extra line.
+`Last sync` is the stored cursor, or `never`. `Space` is the selected space id, or `personal`.
+With no state database yet it reports zero files and folders. A non-empty `selective_sync` is
+listed on an extra line.
+
+## Spaces
+
+A Nuage account has a personal space and, when someone shares one with it, any number of named
+spaces. **Every command answers from one space at a time.** Without a selection that is your
+personal space, so a folder living only in a shared space is invisible: `nuage ls /Clients`
+lists the personal `Clients` and `nuage ls /Clients/DMS` reports `not found` even when the
+shared space has it.
+
+### `nuage spaces list`
+
+```sh
+nuage spaces list
+```
+
+```
+* 1    FacileShared             owner
+```
+
+The `*` marks the current selection. `--json` gives `id`, `name`, `description` and your
+`role`.
+
+### `nuage spaces use`
+
+```sh
+nuage spaces use <name-or-id>
+nuage spaces use --none
+```
+
+Writes `space` to `~/.nuage.yml` and leaves every other key alone. A name is matched
+case-insensitively and resolved to an id, so a later rename does not strand the config.
+`--none` clears it and goes back to the personal space.
+
+### What a space does not change
+
+**The sync daemon is not scoped by the selection.** It syncs every space you can see into one
+`sync_dir`, which is the merged tree `~/Nuage` already holds, and narrowing it would strand
+the other spaces' files in a directory the engine stopped tracking. Per-space sync needs its
+own sync directory and is not built yet.
 
 ## Remote file management
 

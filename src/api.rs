@@ -23,6 +23,8 @@ pub struct ApiFile {
     pub hash: Option<String>,
     pub size: Option<i64>,
     pub folder_id: Option<i64>,
+    #[serde(default)]
+    pub space_id: Option<i64>,
     pub mime_type: Option<String>,
     pub updated_at: String,
 }
@@ -32,7 +34,27 @@ pub struct ApiFolder {
     pub id: i64,
     pub name: String,
     pub parent_id: Option<i64>,
+    #[serde(default)]
+    pub space_id: Option<i64>,
     pub updated_at: String,
+}
+
+/// A space the signed-in user belongs to.
+///
+/// `role` is the caller's role in it, not the space's own attribute.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiSpace {
+    pub id: i64,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SpacesResponse {
+    spaces: Vec<ApiSpace>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +170,7 @@ pub struct UploadCompleteResponse {
 struct Inner {
     base_url: String,
     token: String,
+    space_id: Option<i64>,
     client: reqwest::Client,
     transfer: reqwest::Client,
 }
@@ -198,7 +221,7 @@ fn retry_after_delay(resp: &reqwest::Response) -> Option<Duration> {
 }
 
 impl ApiClient {
-    pub fn new(base_url: &str, token: &str) -> Result<Self> {
+    pub fn new(base_url: &str, token: &str, space_id: Option<i64>) -> Result<Self> {
         let origin = Self::extract_origin(base_url);
         let mut headers = HeaderMap::new();
         if let Ok(val) = HeaderValue::from_str(&origin) {
@@ -221,6 +244,7 @@ impl ApiClient {
             inner: Arc::new(Inner {
                 base_url: base_url.trim_end_matches('/').to_string(),
                 token: token.to_string(),
+                space_id,
                 client,
                 transfer,
             }),
@@ -229,6 +253,19 @@ impl ApiClient {
 
     fn base_url(&self) -> &str {
         &self.inner.base_url
+    }
+
+    /// Appends the selected space to an endpoint URL.
+    ///
+    /// The server answers from the personal space when no `space_id` reaches
+    /// it, which is why a folder that exists only in a shared space used to be
+    /// invisible to every command. Endpoints that belong to the account rather
+    /// than to a space — the API tokens — are built without this.
+    fn scoped_url(&self, url: String) -> String {
+        match self.inner.space_id {
+            Some(id) => format!("{url}?space_id={id}"),
+            None => url,
+        }
     }
 
     fn token(&self) -> &str {
@@ -283,7 +320,7 @@ impl ApiClient {
 
     pub async fn sync_state(&self) -> Result<SyncStateResponse> {
         let client = self.client();
-        let url = format!("{}/sync/state", self.base_url());
+        let url = self.scoped_url(format!("{}/sync/state", self.base_url()));
         let token = self.token();
 
         let resp = self
@@ -305,7 +342,7 @@ impl ApiClient {
 
     pub async fn sync_changes(&self, since: &str) -> Result<SyncChangesResponse> {
         let client = self.client();
-        let url = format!("{}/sync/changes", self.base_url());
+        let url = self.scoped_url(format!("{}/sync/changes", self.base_url()));
         let token = self.token();
 
         let resp = self
@@ -341,7 +378,7 @@ impl ApiClient {
         expected_hash: Option<&str>,
     ) -> Result<()> {
         let client = self.transfer();
-        let url = format!("{}/files/{}/download", self.base_url(), id);
+        let url = self.scoped_url(format!("{}/files/{}/download", self.base_url(), id));
         let token = self.token();
 
         let mut attempt: u32 = 1;
@@ -395,7 +432,7 @@ impl ApiClient {
         data: Vec<u8>,
     ) -> Result<ApiFile> {
         let client = self.transfer();
-        let url = format!("{}/files", self.base_url());
+        let url = self.scoped_url(format!("{}/files", self.base_url()));
         let token = self.token();
 
         let resp = self
@@ -438,7 +475,7 @@ impl ApiClient {
         data: Vec<u8>,
     ) -> Result<ApiFile> {
         let client = self.transfer();
-        let url = format!("{}/files/{}/reupload", self.base_url(), id);
+        let url = self.scoped_url(format!("{}/files/{}/reupload", self.base_url(), id));
         let token = self.token();
 
         let resp = self
@@ -504,7 +541,7 @@ impl ApiClient {
         folder_id: Option<i64>,
     ) -> Result<UploadSession> {
         let client = self.client();
-        let url = format!("{}/files/upload/init", self.base_url());
+        let url = self.scoped_url(format!("{}/files/upload/init", self.base_url()));
         let token = self.token();
         let body = serde_json::json!({
             "file_name": name,
@@ -564,12 +601,12 @@ impl ApiClient {
 
     async fn upload_part(&self, session_id: &str, part_number: u32, chunk: &[u8]) -> Result<()> {
         let client = self.transfer();
-        let url = format!(
+        let url = self.scoped_url(format!(
             "{}/files/upload/{}/part/{}",
             self.base_url(),
             session_id,
             part_number
-        );
+        ));
         let token = self.token();
 
         let resp = self
@@ -596,7 +633,7 @@ impl ApiClient {
 
     async fn upload_complete(&self, session_id: &str) -> Result<ApiFile> {
         let client = self.client();
-        let url = format!("{}/files/upload/{}/complete", self.base_url(), session_id);
+        let url = self.scoped_url(format!("{}/files/upload/{}/complete", self.base_url(), session_id));
         let token = self.token();
 
         let resp = self
@@ -626,7 +663,7 @@ impl ApiClient {
 
     async fn upload_abort(&self, session_id: &str) -> Result<()> {
         let client = self.client();
-        let url = format!("{}/files/upload/{}", self.base_url(), session_id);
+        let url = self.scoped_url(format!("{}/files/upload/{}", self.base_url(), session_id));
         let token = self.token();
 
         let resp = self
@@ -656,7 +693,7 @@ impl ApiClient {
         }
 
         let client = self.client();
-        let url = format!("{}/folders", self.base_url());
+        let url = self.scoped_url(format!("{}/folders", self.base_url()));
         let token = self.token();
 
         let resp = self
@@ -686,7 +723,7 @@ impl ApiClient {
         }
 
         let client = self.client();
-        let url = format!("{}/files/{}", self.base_url(), id);
+        let url = self.scoped_url(format!("{}/files/{}", self.base_url(), id));
         let token = self.token();
 
         let resp = self
@@ -716,7 +753,7 @@ impl ApiClient {
         }
 
         let client = self.client();
-        let url = format!("{}/folders/{}", self.base_url(), id);
+        let url = self.scoped_url(format!("{}/folders/{}", self.base_url(), id));
         let token = self.token();
 
         let resp = self
@@ -738,7 +775,7 @@ impl ApiClient {
 
     pub async fn delete_file(&self, id: i64) -> Result<()> {
         let client = self.client();
-        let url = format!("{}/files/{}", self.base_url(), id);
+        let url = self.scoped_url(format!("{}/files/{}", self.base_url(), id));
         let token = self.token();
 
         let resp = self
@@ -758,7 +795,7 @@ impl ApiClient {
 
     pub async fn delete_folder(&self, id: i64) -> Result<()> {
         let client = self.client();
-        let url = format!("{}/folders/{}", self.base_url(), id);
+        let url = self.scoped_url(format!("{}/folders/{}", self.base_url(), id));
         let token = self.token();
 
         let resp = self
@@ -783,7 +820,7 @@ impl ApiClient {
 
     pub async fn list_folders(&self) -> Result<Vec<ApiFolder>> {
         let client = self.client();
-        let url = format!("{}/folders", self.base_url());
+        let url = self.scoped_url(format!("{}/folders", self.base_url()));
         let token = self.token();
 
         let resp = self
@@ -804,7 +841,7 @@ impl ApiClient {
 
     pub async fn get_folder(&self, id: i64) -> Result<FolderDetailResponse> {
         let client = self.client();
-        let url = format!("{}/folders/{}", self.base_url(), id);
+        let url = self.scoped_url(format!("{}/folders/{}", self.base_url(), id));
         let token = self.token();
 
         let resp = self
@@ -826,7 +863,7 @@ impl ApiClient {
 
     pub async fn download_file_stream(&self, id: i64) -> Result<reqwest::Response> {
         let client = self.transfer();
-        let url = format!("{}/files/{}/download", self.base_url(), id);
+        let url = self.scoped_url(format!("{}/files/{}/download", self.base_url(), id));
         let token = self.token();
 
         let resp = self
@@ -864,7 +901,7 @@ impl ApiClient {
         }
 
         let client = self.client();
-        let url = format!("{}/shares", self.base_url());
+        let url = self.scoped_url(format!("{}/shares", self.base_url()));
         let token = self.token();
 
         let resp = self
@@ -882,9 +919,37 @@ impl ApiClient {
         resp.json().await.context("failed to parse share response")
     }
 
+    /// Lists the spaces the signed-in user belongs to.
+    ///
+    /// Deliberately unscoped: it is the command that tells you which space to
+    /// select, so scoping it to a selection would be circular.
+    pub async fn list_spaces(&self) -> Result<Vec<ApiSpace>> {
+        let client = self.client();
+        let url = format!("{}/spaces", self.base_url());
+        let token = self.token();
+
+        let resp = self
+            .send_with_retry("failed to list spaces", || {
+                client.get(&url).bearer_auth(token).send()
+            })
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GET /spaces failed ({}): {}", status, body);
+        }
+
+        let parsed: SpacesResponse = resp
+            .json()
+            .await
+            .context("failed to parse spaces response")?;
+        Ok(parsed.spaces)
+    }
+
     pub async fn list_shares(&self) -> Result<Vec<ShareResponse>> {
         let client = self.client();
-        let url = format!("{}/shares/by-me", self.base_url());
+        let url = self.scoped_url(format!("{}/shares/by-me", self.base_url()));
         let token = self.token();
 
         let resp = self
@@ -905,7 +970,7 @@ impl ApiClient {
 
     pub async fn delete_share(&self, id: i64) -> Result<()> {
         let client = self.client();
-        let url = format!("{}/shares/{}", self.base_url(), id);
+        let url = self.scoped_url(format!("{}/shares/{}", self.base_url(), id));
         let token = self.token();
 
         let resp = self
@@ -942,7 +1007,7 @@ impl ApiClient {
         }
 
         let client = self.client();
-        let url = format!("{}/search", self.base_url());
+        let url = self.scoped_url(format!("{}/search", self.base_url()));
         let token = self.token();
 
         let resp = self

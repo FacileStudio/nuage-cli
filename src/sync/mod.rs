@@ -1235,18 +1235,21 @@ mod tests {
                 id: 3,
                 name: "deep".into(),
                 parent_id: Some(2),
+                space_id: None,
                 updated_at: "t".into(),
             },
             ApiFolder {
                 id: 1,
                 name: "root".into(),
                 parent_id: None,
+                space_id: None,
                 updated_at: "t".into(),
             },
             ApiFolder {
                 id: 2,
                 name: "mid".into(),
                 parent_id: Some(1),
+                space_id: None,
                 updated_at: "t".into(),
             },
         ];
@@ -1263,12 +1266,14 @@ mod tests {
                 id: 1,
                 name: "a".into(),
                 parent_id: Some(2),
+                space_id: None,
                 updated_at: "t".into(),
             },
             ApiFolder {
                 id: 2,
                 name: "b".into(),
                 parent_id: Some(1),
+                space_id: None,
                 updated_at: "t".into(),
             },
         ];
@@ -1284,12 +1289,14 @@ mod tests {
                 id: 1,
                 name: "Clients".into(),
                 parent_id: None,
+                space_id: None,
                 updated_at: "t".into(),
             },
             ApiFolder {
                 id: 2,
                 name: "Acme".into(),
                 parent_id: Some(1),
+                space_id: None,
                 updated_at: "t".into(),
             },
         ];
