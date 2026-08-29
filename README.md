@@ -52,6 +52,8 @@ nuage logout                       # clear the stored token, keep everything els
 nuage start                        # background sync daemon
 nuage status                       # daemon state, last sync, file counts
 nuage sync                         # one-shot bidirectional sync
+nuage spaces list                  # every space you can act in, personal included
+nuage spaces use personal          # act on your own files again
 nuage ls /Documents -l
 nuage upload report.pdf /Documents
 nuage share /Documents/report.pdf -e 7d
@@ -102,7 +104,7 @@ ignore_patterns:
 | `sync_dir` | Local directory to keep in sync. `~` is expanded. Defaults to `~/Nuage` |
 | `poll_interval` | Seconds between server polls in the daemon. Defaults to `30` |
 | `ignore_patterns` | Globs excluded from sync. `.nuage/` is always added |
-| `space` | Space the commands act on. Absent means your personal space. Written by `nuage spaces use` |
+| `space` | Space the commands act on. Absent means your personal space. Written by `nuage spaces use`, and removed by `nuage spaces use personal` |
 
 Two environment variables override the file, for CI and for one-off runs against another
 instance. Precedence is flag, then environment, then file, then built-in default.
@@ -111,7 +113,7 @@ instance. Precedence is flag, then environment, then file, then built-in default
 |---|---|
 | `NUAGE_TOKEN` | `token` |
 | `NUAGE_SERVER_URL` | `server_url` |
-| `NUAGE_SPACE` | `space`, as an id |
+| `NUAGE_SPACE` | `space`, as an id. A name, `personal` included, is ignored here |
 
 Full reference, including `selective_sync` and the on-disk layout:
 [docs/configuration.md](docs/configuration.md).

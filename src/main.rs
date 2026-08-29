@@ -226,11 +226,11 @@ enum SpacesCommand {
 
 #[derive(clap::Args)]
 struct SpacesUseArgs {
-    /// Space name or id
-    #[arg(required_unless_present = "none")]
-    space: Option<String>,
+    /// Space name or id, or `personal` for your own files
+    #[arg(value_name = "NAME_OR_ID", required_unless_present = "none")]
+    name: Option<String>,
 
-    /// Clear the selection and go back to the personal space
+    /// Same as `personal`
     #[arg(long)]
     none: bool,
 }
@@ -273,12 +273,33 @@ fn main() {
     }
 }
 
+/// The name for the account's own tree.
+///
+/// The server does not list it, because it is the absence of a space rather
+/// than one of them. Without a name for it there is no way to ask for it by
+/// hand, which left `--none` as the only way back and nothing in `spaces list`
+/// saying so.
+const PERSONAL: &str = "personal";
+
+fn is_personal(raw: &str) -> bool {
+    raw.eq_ignore_ascii_case(PERSONAL)
+}
+
+/// What `--space` asked for. `Unset` and `Personal` are different answers:
+/// the first defers to the config, the second overrides it.
+#[derive(Clone, Copy)]
+enum SpaceFlag {
+    Unset,
+    Personal,
+    Space(i64),
+}
+
 /// The `--space` flag, resolved to an id once per run.
 ///
 /// Resolving a name costs a request, and `load_api` is called from twenty
 /// synchronous places, so the lookup happens once in `run` and every later
 /// caller reads the answer.
-static SPACE_OVERRIDE: OnceLock<Option<i64>> = OnceLock::new();
+static SPACE_OVERRIDE: OnceLock<SpaceFlag> = OnceLock::new();
 
 fn run(cli: Cli) -> Result<()> {
     let space_flag = cli.space.clone();
@@ -329,19 +350,23 @@ fn run(cli: Cli) -> Result<()> {
 ///
 /// An id is the common case and costs nothing; a name costs one request, which
 /// is the price of not having to look the number up by hand.
-async fn resolve_space_flag(flag: Option<&str>) -> Result<Option<i64>> {
+async fn resolve_space_flag(flag: Option<&str>) -> Result<SpaceFlag> {
     let raw = match flag {
         Some(v) => v.trim(),
-        None => return Ok(None),
+        None => return Ok(SpaceFlag::Unset),
     };
 
+    if is_personal(raw) {
+        return Ok(SpaceFlag::Personal);
+    }
+
     if let Ok(id) = raw.parse::<i64>() {
-        return Ok(Some(id));
+        return Ok(SpaceFlag::Space(id));
     }
 
     let config = config::Config::load()?;
     let api = ApiClient::new(&config.server_url, &config.token, None)?;
-    Ok(Some(resolve_space_name(&api, raw).await?))
+    Ok(SpaceFlag::Space(resolve_space_name(&api, raw).await?))
 }
 
 /// Matches a space by name, case-insensitively.
@@ -352,10 +377,11 @@ async fn resolve_space_name(api: &ApiClient, name: &str) -> Result<i64> {
     match spaces.iter().find(|s| s.name.to_lowercase() == wanted) {
         Some(space) => Ok(space.id),
         None if spaces.is_empty() => {
-            bail!("no space named `{name}` — this account belongs to none")
+            bail!("no space named `{name}` — this account belongs to none, so only `{PERSONAL}` is available")
         }
         None => {
-            let known: Vec<&str> = spaces.iter().map(|s| s.name.as_str()).collect();
+            let mut known: Vec<&str> = vec![PERSONAL];
+            known.extend(spaces.iter().map(|s| s.name.as_str()));
             bail!("no space named `{name}` — known: {}", known.join(", "))
         }
     }
@@ -364,11 +390,11 @@ async fn resolve_space_name(api: &ApiClient, name: &str) -> Result<i64> {
 /// The space every request is scoped to: the flag when given, the config
 /// otherwise, and the personal space when neither names one.
 fn selected_space(config: &config::Config) -> Option<i64> {
-    SPACE_OVERRIDE
-        .get()
-        .copied()
-        .flatten()
-        .or(config.space)
+    match SPACE_OVERRIDE.get() {
+        Some(SpaceFlag::Personal) => None,
+        Some(SpaceFlag::Space(id)) => Some(*id),
+        _ => config.space,
+    }
 }
 
 fn load_api() -> Result<ApiClient> {
@@ -955,18 +981,28 @@ async fn cmd_spaces_list(json: bool) -> Result<()> {
     let config = config::Config::load()?;
     let api = ApiClient::new(&config.server_url, &config.token, None)?;
     let spaces = api.list_spaces().await?;
+    let selected = selected_space(&config);
 
     if json {
-        println!("{}", serde_json::to_string(&spaces)?);
+        println!(
+            "{}",
+            serde_json::json!({ "selected": selected, "spaces": spaces })
+        );
         return Ok(());
     }
 
-    if spaces.is_empty() {
-        ui::step("No spaces — everything lives in your personal space");
-        return Ok(());
-    }
+    /* The personal tree is listed alongside the real spaces even though the
+       server does not return it, because a target you cannot see is a target
+       you cannot switch back to. */
+    let marker = if selected.is_none() { "*" } else { " " };
+    println!(
+        "{} {:<4} {:<24} {}",
+        marker,
+        "-",
+        PERSONAL,
+        ui::dim("your own files")
+    );
 
-    let selected = selected_space(&config);
     for space in &spaces {
         let marker = if Some(space.id) == selected { "*" } else { " " };
         println!(
@@ -978,43 +1014,43 @@ async fn cmd_spaces_list(json: bool) -> Result<()> {
         );
     }
 
-    if selected.is_none() {
-        ui::hint("none selected — commands act on your personal space");
-    }
-
     Ok(())
 }
 
 async fn cmd_spaces_use(args: &SpacesUseArgs, json: bool) -> Result<()> {
-    let mut config = config::Config::load()?;
+    let raw = args.name.as_deref().map(str::trim).unwrap_or(PERSONAL);
+    let wants_personal = args.none || is_personal(raw);
 
-    let chosen = if args.none {
+    let chosen = if wants_personal {
         None
     } else {
-        let raw = args
-            .space
-            .as_deref()
-            .expect("clap requires a space unless --none");
-        let api = ApiClient::new(&config.server_url, &config.token, None)?;
-        Some(match raw.trim().parse::<i64>() {
+        let loaded = config::Config::load()?;
+        let api = ApiClient::new(&loaded.server_url, &loaded.token, None)?;
+        Some(match raw.parse::<i64>() {
             Ok(id) => id,
-            Err(_) => resolve_space_name(&api, raw.trim()).await?,
+            Err(_) => resolve_space_name(&api, raw).await?,
         })
     };
 
+    /* Read-modify-write against the file rather than the validated config, so a
+       NUAGE_TOKEN or NUAGE_SERVER_URL set for this one run is not baked into
+       ~/.nuage.yml as if it had been typed there. */
+    let mut config = config::Config::load_or_default()?;
     config.space = chosen;
     config.save()?;
 
     if json {
-        println!("{}", serde_json::json!({ "space": chosen }));
+        println!("{}", serde_json::json!({ "selected": chosen }));
         return Ok(());
     }
 
     match chosen {
-        Some(id) => ui::success(&format!("Now working in space {id}")),
-        None => ui::success("Cleared — back to your personal space"),
+        Some(id) => {
+            ui::success(&format!("Now working in space {id}"));
+            ui::hint(&format!("`nuage spaces use {PERSONAL}` goes back to your own files"));
+        }
+        None => ui::success("Now working in your personal space"),
     }
-    ui::hint("file commands follow this; the sync daemon still syncs every space");
     Ok(())
 }
 

@@ -56,9 +56,9 @@ nuage token revoke <id>
 
 ### Spaces
 ```
-nuage spaces list              List spaces available to this account
+nuage spaces list              List spaces, personal first
 nuage spaces use <name-or-id>  Select the space every command acts on
-nuage spaces use --none        Go back to the personal space
+nuage spaces use personal      Go back to your own files (--none is an alias)
 ```
 
 ### Setup
@@ -77,6 +77,11 @@ nuage upgrade                  Self-upgrade
 - Every command answers from **one space**, the personal one unless a space is selected. A path
   that exists only in a shared space reports `not found` until you pass `--space <name-or-id>`
   or run `nuage spaces use`. `--space` is global and accepts a name or an id
+- `personal` names the account's own files wherever a space is named, case-insensitively:
+  `nuage spaces use personal` and `nuage --space personal <cmd>`. It is the only name the server
+  does not know, so it never appears in `GET /spaces`
+- `nuage spaces list --json` prints `{"selected": <id|null>, "spaces": [...]}`, where `selected`
+  is `null` for the personal space. Before 0.5.0 it printed the bare array now under `spaces`
 - The sync daemon is deliberately not scoped by the selection: it syncs every visible space into
   one `sync_dir`
 - `login` and `logout` only touch `server_url` and `token`; the user's sync settings survive
