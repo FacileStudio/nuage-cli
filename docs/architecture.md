@@ -157,6 +157,12 @@ suite's Go auth kit, and are the only ones `nuage` calls without a bearer token.
 uses a plain `reqwest::Client` for them rather than `ApiClient`, which exists to attach
 credentials it does not yet have.
 
+porte also ships the listener half of that flow, as `porte/loopback`, and every Go CLI in the
+suite now links it. This one cannot, so `login.rs` keeps its own listener and `handoff.rs`
+keeps a byte-for-byte copy of the page porte renders. The copy is the point: `diff` against
+`porte/internal/handoff` or `Mycelium/internal/server/handoff.html.tmpl` is what proves the
+pages have not drifted, which a page rewritten in Rust could never have offered.
+
 None of these carry an `/api` prefix, but the deployed Nuage sits behind a Traefik router that
 strips one — so `server_url` normally ends in `/api`. See
 [configuration.md](configuration.md).

@@ -37,6 +37,8 @@ src/
   api.rs           HTTP API client (reqwest) for the Nuage server
   config.rs        Config loading/saving from ~/.nuage.yml
   daemon.rs        Daemonize logic (start/stop/restart, PID file management)
+  handoff.rs       The sign-in page the loopback listener serves; handoff.html.tmpl is
+                   a byte-for-byte copy of the suite's template, kept diffable on purpose
   hash.rs          SHA-256 file hashing for change detection
   ignore.rs        Glob-based ignore pattern matching
   sync/

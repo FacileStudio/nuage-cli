@@ -2,6 +2,7 @@ mod api;
 mod ui;
 mod config;
 mod daemon;
+mod handoff;
 mod hash;
 mod ignore;
 mod login;

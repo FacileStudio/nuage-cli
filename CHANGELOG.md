@@ -11,6 +11,28 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+### Changed
+
+- **The browser lands on the suite's sign-in page.** `src/handoff.html.tmpl` is
+  a byte-for-byte copy of the template every other Facile tool renders, so a
+  `nuage` login and a `courrier` login now end on the same page. It replaces
+  eight lines of inline styles with an unclosed `<body>`.
+- **A refused callback renders that same page.** Success and failure used to
+  agree only by accident, having been written minutes apart. Both refusals, a
+  callback with no code and one carrying the wrong nonce, now render the page
+  with the warning colour and a line saying the login is still waiting.
+
+### Fixed
+
+- **A callback carrying the wrong nonce no longer ends the login.** It is
+  refused and the listener keeps waiting. Ending it let any page the user has
+  open close a login it did not start, simply by guessing the ephemeral port,
+  which is the same class of problem as the `/favicon.ico` a browser asks for
+  unprompted. Refusing the callback is what keeps a session that is not the
+  user's out of this CLI; leaving the login open is the other half of it.
+- The ``the sign-in callback did not match this login attempt`` error is gone,
+  along with its row in `docs/configuration.md`. Nothing raises it any more.
+
 ## [0.5.0] — 2026-08-29
 
 ### Added

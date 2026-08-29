@@ -68,6 +68,11 @@ browser. The CLI listens on an ephemeral loopback port, the server sends the bro
 a single-use code valid for sixty seconds, and the CLI exchanges that code for a token. No
 credential is ever typed into the terminal or left in a URL.
 
+The page the browser lands on at the end is the suite's, not this repo's: `src/handoff.html.tmpl`
+is a byte-for-byte copy of the template every Facile tool renders, so a `nuage` login and a
+`courrier` one end on the same page. A callback the listener refuses, one carrying no code or the
+wrong nonce, gets that page too, coloured as a warning and saying the login is still waiting.
+
 ```sh
 nuage login --server https://nuage.facile.studio   # the /api suffix is added for you
 nuage login --token                                # paste an API token instead
@@ -127,6 +132,7 @@ src/
   login.rs     browser SSO loopback flow, API-token fallback, logout
   api.rs       Nuage REST client and response models
   daemon.rs    PID file, log paths, daemon and terminal logging setup
+  handoff.rs   the sign-in page the loopback listener serves, shared with the suite
   hash.rs      buffered SHA-256 file hashing
   ignore.rs    glob ignore matching
   sync/        the sync engine: state DB, watcher, conflict resolver, transfers

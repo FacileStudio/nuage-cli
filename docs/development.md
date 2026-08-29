@@ -102,6 +102,7 @@ test without a server or a filesystem.
 | `src/config.rs` | `Config`, its defaults, validation, `sync_dir_expanded`, `save` |
 | `src/api.rs` | `ApiClient`, both HTTP clients, response models, one method per endpoint |
 | `src/daemon.rs` | PID and log paths, `is_running`, the two logging initializers |
+| `src/handoff.rs` | The sign-in page the loopback listener serves, and the template it renders |
 | `src/hash.rs` | Buffered SHA-256 hashing |
 | `src/ignore.rs` | `IgnoreRules`, including the forced `.nuage/` entries |
 | `src/sync/mod.rs` | `SyncEngine`: full sync, local changes, remote changes, uploads, scans |

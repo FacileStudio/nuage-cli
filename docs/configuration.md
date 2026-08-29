@@ -140,7 +140,6 @@ already have one. `nuage token revoke <id>` invalidates one.
 | `invalid config at ...` | Malformed YAML |
 | ``no server_url configured — run `nuage login --server ...` `` | No config file, or the key is blank, and `NUAGE_SERVER_URL` is unset |
 | ``not signed in — run `nuage login`, or set NUAGE_TOKEN`` | Signed out, or never signed in |
-| ``the sign-in callback did not match this login attempt`` | Something other than your browser hit the loopback port. Run `nuage login` again |
 | ``the server refused the login code (400)`` | The one-time code expired. It lasts sixty seconds |
 | `GET /sync/state failed (401): ...` | Wrong or revoked token |
 | `GET /sync/state failed (404): ...` | `server_url` is missing the `/api` suffix |

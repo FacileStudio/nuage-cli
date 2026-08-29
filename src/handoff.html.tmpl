@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{.Heading}} · {{.AppName}}</title>
+<style>
+  :root{color-scheme:light dark;--bg:#fafafa;--fg:#18181b;--muted:#71717a;--card:#fff;--line:#e4e4e7;--btn:#18181b;--btn-fg:#fafafa;--warn:#b45309}
+  @media (prefers-color-scheme:dark){:root{--bg:#09090b;--fg:#fafafa;--muted:#a1a1aa;--card:#18181b;--line:#27272a;--btn:#fafafa;--btn-fg:#18181b;--warn:#fbbf24}}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:1.5rem;
+       background:var(--bg);color:var(--fg);
+       font:16px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  main{width:100%;max-width:26rem}
+  .brand{display:flex;align-items:center;justify-content:center;gap:.625rem;margin-bottom:2rem}
+  .brand img{display:block;width:28px;height:28px}
+  .brand span{font-size:1.125rem;font-weight:650;letter-spacing:-.01em}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:.75rem;padding:1.75rem;text-align:center}
+  h1{margin:0;font-size:1.25rem;font-weight:650;letter-spacing:-.01em}
+  p{margin:.5rem 0 0;font-size:.875rem;color:var(--muted)}
+  p.warn{color:var(--warn)}
+  .code{display:flex;align-items:center;gap:.5rem;margin-top:1.25rem}
+  .code output{flex:1;min-width:0;padding:.75rem;border:1px solid var(--line);border-radius:.5rem;
+                background:var(--bg);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+                font-size:1.0625rem;letter-spacing:.15em;word-break:break-all}
+  button{flex:none;height:2.75rem;padding:0 1rem;border:0;border-radius:.5rem;background:var(--btn);color:var(--btn-fg);
+         font:inherit;font-size:.875rem;font-weight:500;cursor:pointer}
+  button:hover{opacity:.9}
+  .hint{margin-top:1.5rem;text-align:center;font-size:.8125rem;color:var(--muted)}
+</style>
+<main>
+  <div class="brand">
+    {{if .LogoURL}}<img src="{{.LogoURL}}" alt="" onerror="this.remove()">{{end}}
+    <span>{{.AppName}}</span>
+  </div>
+  <div class="card">
+    <h1>{{.Heading}}</h1>
+    <p{{if .Warn}} class="warn"{{end}}>{{.Body}}</p>
+    {{if .Code}}
+    <div class="code">
+      <output id="c">{{.Code}}</output>
+      <button type="button" id="b">Copy</button>
+    </div>
+    {{end}}
+  </div>
+  <p class="hint">{{.Hint}}</p>
+</main>
+{{if .Code}}
+<script>
+  const b=document.getElementById("b"),c=document.getElementById("c");
+  b.addEventListener("click",async()=>{
+    const t=c.textContent.trim();
+    try{await navigator.clipboard.writeText(t)}
+    catch{const s=document.createElement("textarea");s.value=t;document.body.append(s);s.select();document.execCommand("copy");s.remove()}
+    b.textContent="Copied";setTimeout(()=>b.textContent="Copy",1600);
+  });
+</script>
+{{end}}
