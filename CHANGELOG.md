@@ -11,6 +11,8 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-08-30
+
 ### Changed
 
 - **The browser lands on the suite's sign-in page.** `src/handoff.html.tmpl` is
@@ -151,7 +153,8 @@ tag is v0.2.0; everything before it is folded into that entry.
   them.
 - The daemon guards against PID 0 and stops creating a directory twice.
 
-[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.2.0...v0.3.0
