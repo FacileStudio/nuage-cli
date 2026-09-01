@@ -65,6 +65,7 @@ Config lives at `~/.nuage.yml` -- see `config.example.yaml` for the format.
 `share`, `unshare`, `shares` -- share link management  
 `search` -- search files/folders  
 `token create|list|revoke` -- API token management  
+`keys create|list|revoke` -- API key management  
 `spaces list|use` -- list spaces, or select the one commands act on (`personal` for the account's own files)  
 
 All subcommands support `--json` for machine-readable output.

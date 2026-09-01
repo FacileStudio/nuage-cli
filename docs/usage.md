@@ -421,12 +421,56 @@ nuage token revoke 7
 
 Revokes a token by ID. Prints `token 7 revoked`.
 
+## API keys
+
+### `nuage keys create`
+
+| Flag | What it does |
+|---|---|
+| `-a`, `--app <NAME>` | Application name. Required |
+| `--public` | Create a public browser key instead of a secret key |
+| `--origins <URLS>` | Comma-separated allowed origins (for public keys) |
+| `--quota <N>` | Daily event quota limit (for public keys) |
+
+```sh
+nuage keys create --app myapp
+nuage keys create --app myapp --public --origins https://example.com --quota 1000
+```
+
+Prints the created key metadata and the raw token value. In `--json` mode, returns the full JSON response.
+
+### `nuage keys list`
+
+| Flag | What it does |
+|---|---|
+| `-a`, `--app <NAME>` | Filter keys by application name |
+
+```sh
+nuage keys list
+nuage keys list --app myapp
+```
+
+Prints `#<id>  <app>  <kind>  <prefix>  <status>  <quota>  <created>`, or `no API keys found`.
+
+### `nuage keys revoke`
+
+| Flag | What it does |
+|---|---|
+| `-y`, `--yes` | Confirm revocation without prompting |
+
+```sh
+nuage keys revoke 42
+nuage keys revoke 42 --yes
+```
+
+Revokes an API key by ID. Prints `revoked key 42`.
+
 ## Machine-readable output
 
 `--json` is accepted anywhere and honored by `ls`, `upload`, `download`, `mkdir`, `mv`, `rm`,
-`share`, `shares`, `unshare`, `search` and all three `token` subcommands. It prints compact
-JSON on stdout, suppresses the progress bar, and — importantly — makes `rm` skip its
-confirmation prompt, since there is no one to answer it.
+`share`, `shares`, `unshare`, `search`, `token` and `keys` subcommands. It prints compact
+JSON on stdout, suppresses the progress bar, and makes `rm` skip its
+confirmation prompt.
 
 ```sh
 nuage --json ls /Documents | jq -r '.[] | select(.type == "file") | .name'

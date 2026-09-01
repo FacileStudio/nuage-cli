@@ -18,7 +18,7 @@ use std::sync::OnceLock;
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 
-use api::{ApiClient, ApiFile, ApiFolder};
+use api::{ApiClient, ApiFile, ApiFolder, CreateKeyRequest};
 use sync::transfer;
 
 #[derive(Parser)]
@@ -94,6 +94,9 @@ enum Command {
     /// Manage API tokens
     #[command(subcommand)]
     Token(TokenCommand),
+    /// Manage API keys
+    #[command(subcommand)]
+    Keys(KeysCommand),
 }
 
 #[derive(clap::Args)]
@@ -249,6 +252,52 @@ struct TokenRevokeArgs {
     id: i64,
 }
 
+#[derive(Subcommand)]
+enum KeysCommand {
+    /// List API keys
+    List(KeysListArgs),
+    /// Create a new API key
+    Create(KeysCreateArgs),
+    /// Revoke an API key
+    Revoke(KeysRevokeArgs),
+}
+
+#[derive(clap::Args)]
+struct KeysListArgs {
+    /// Filter keys by application name
+    #[arg(short, long)]
+    app: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct KeysCreateArgs {
+    /// Application name
+    #[arg(short, long)]
+    app: String,
+
+    /// Create a public browser key instead of a secret key
+    #[arg(long)]
+    public: bool,
+
+    /// Comma-separated allowed origins (for public keys)
+    #[arg(long)]
+    origins: Option<String>,
+
+    /// Daily event quota limit (for public keys)
+    #[arg(long)]
+    quota: Option<i64>,
+}
+
+#[derive(clap::Args)]
+struct KeysRevokeArgs {
+    /// Key ID to revoke
+    id: i64,
+
+    /// Confirm revocation without prompting
+    #[arg(short, long)]
+    yes: bool,
+}
+
 #[derive(Serialize)]
 struct LsEntry {
     name: String,
@@ -368,6 +417,7 @@ fn run(cli: Cli) -> Result<()> {
                     Some(Command::Search(args)) => cmd_search(&args, cli.json).await,
                     Some(Command::Spaces(sub)) => cmd_spaces(sub, cli.json).await,
                     Some(Command::Token(sub)) => cmd_token(sub, cli.json).await,
+                    Some(Command::Keys(sub)) => cmd_keys(sub, cli.json).await,
                     _ => unreachable!(),
                 }
             })
@@ -1154,6 +1204,97 @@ async fn cmd_token(sub: TokenCommand, json: bool) -> Result<()> {
                 println!("{}", serde_json::json!({"deleted": true, "id": args.id}));
             } else {
                 ui::success(&format!("Token {} revoked", args.id));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn cmd_keys(sub: KeysCommand, json: bool) -> Result<()> {
+    let api = load_api()?;
+
+    match sub {
+        KeysCommand::List(args) => {
+            let mut keys = api.list_keys(args.app.as_deref()).await?;
+            if let Some(ref a) = args.app {
+                keys.retain(|k| &k.app == a);
+            }
+            if json {
+                println!("{}", serde_json::to_string(&keys)?);
+                return Ok(());
+            }
+            if keys.is_empty() {
+                ui::step("no API keys found");
+                return Ok(());
+            }
+            println!(
+                "{:<6} {:<16} {:<8} {:<12} {:<8} {:<24} {}",
+                "ID", "APP", "KIND", "PREFIX", "STATUS", "QUOTA", "CREATED"
+            );
+            for k in &keys {
+                let status = if k.revoked_at.is_some() {
+                    "revoked"
+                } else {
+                    "active"
+                };
+                let quota = if k.daily_quota > 0 {
+                    format!("{}/day ({} used)", k.daily_quota, k.used_today.unwrap_or(0))
+                } else {
+                    "unlimited".to_string()
+                };
+                let created = if k.created_at.len() >= 10 {
+                    &k.created_at[..10]
+                } else {
+                    &k.created_at
+                };
+                println!(
+                    "#{:<5} {:<16} {:<8} {:<12} {:<8} {:<24} {}",
+                    k.id, k.app, k.kind, k.prefix, status, quota, created
+                );
+            }
+        }
+        KeysCommand::Create(args) => {
+            let kind = if args.public {
+                "public".to_string()
+            } else {
+                "secret".to_string()
+            };
+            let origins = args
+                .origins
+                .map(|raw| {
+                    raw.split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let req = CreateKeyRequest {
+                app: args.app,
+                kind,
+                allowed_origins: origins,
+                daily_quota: args.quota,
+            };
+            let resp = api.create_key(&req).await?;
+            if json {
+                println!("{}", serde_json::to_string(&resp)?);
+            } else {
+                ui::success(&format!(
+                    "created {} key for {} (id: {})",
+                    resp.key.kind, resp.key.app, resp.key.id
+                ));
+                println!("{}", resp.token);
+                ui::hint("store this token securely; it will not be shown again");
+            }
+        }
+        KeysCommand::Revoke(args) => {
+            api.revoke_key(args.id).await?;
+            if json {
+                println!("{}", serde_json::json!({ "revoked": args.id }));
+            } else {
+                ui::success(&format!("revoked key {}", args.id));
             }
         }
     }

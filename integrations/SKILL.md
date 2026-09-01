@@ -54,6 +54,13 @@ nuage token list
 nuage token revoke <id>
 ```
 
+### Keys
+```
+nuage keys create --app <name> [--public] [--origins <urls>] [--quota <n>]
+nuage keys list [--app <name>]
+nuage keys revoke <id> [--yes]
+```
+
 ### Spaces
 ```
 nuage spaces list              List spaces, personal first
@@ -85,7 +92,7 @@ nuage upgrade                  Self-upgrade
 - The sync daemon is deliberately not scoped by the selection: it syncs every visible space into
   one `sync_dir`
 - `login` and `logout` only touch `server_url` and `token`; the user's sync settings survive
-- All file/share/search/token commands support `--json`
+- All file/share/search/token/keys commands support `--json`
 - Daemon commands do NOT support `--json`
 - Confirm before `rm` unless user says `-f`
 - Use `--json` when parsing output programmatically

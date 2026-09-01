@@ -16,7 +16,7 @@ upload, download, move, share and search remote files.
 - Glob ignore patterns and optional selective sync of specific paths
 - Remote file management: `ls`, `upload`, `download`, `mkdir`, `mv`, `rm`, `search`
 - Share links with view or edit permission and an optional expiry
-- API token management, and `--json` on every non-daemon command
+- API token and API key management, and `--json` on every non-daemon command
 
 ## Stack
 
@@ -57,6 +57,8 @@ nuage spaces use personal          # act on your own files again
 nuage ls /Documents -l
 nuage upload report.pdf /Documents
 nuage share /Documents/report.pdf -e 7d
+nuage keys list                    # list registered API keys
+nuage keys create --app myapp      # create an API key
 ```
 
 Full command reference and flags: [docs/usage.md](docs/usage.md).
