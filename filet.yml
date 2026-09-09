@@ -23,13 +23,13 @@ extensions: [.rs]
 
 # Only four of filet's limits reach a `.rs` file; the rest (funcLines,
 # funcStatements, complexity, structFields, interfaceMethods) are Go-only and
-# are left out rather than pinned to numbers that do nothing. These are filet's
-# own defaults, except funcsPerFile, which is off: filet counts free functions
-# and impl methods alike, so any Rust module with one `impl` blows the budget
-# and the rule says nothing about whether the module does too much.
+# are left out rather than pinned to numbers that do nothing. funcsPerFile is
+# filet's strict default: filet counts `impl` methods as functions, so a module
+# holding a few impls plus helpers can exceed it, but the budget still catches a
+# file that genuinely declares more than eight top-level items.
 limits:
   fileLines: 250
-  funcsPerFile: 0
+  funcsPerFile: 8
   lineLength: 120
   nesting: 4
 
