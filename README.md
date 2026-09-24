@@ -15,7 +15,7 @@ it in that space's mapped directory and it syncs.
 - Background daemon with PID file, log file, and `start` / `stop` / `restart` / `logs`
 - Filesystem watching with a 2-second debounce, plus a configurable server poll
 - Conflict resolution using the last known hash, keeping both copies when it cannot decide
-- Glob ignore patterns and optional selective sync of specific paths
+- Glob ignore patterns
 - Remote reads with `search`, and share links with view or edit permission and an expiry
 - API token and API key management, and `--json` on every non-daemon command
 
@@ -87,8 +87,7 @@ API and paste it at the prompt. Login also falls back to it on its own if a brow
 opened and the instance permits it.
 
 Both commands rewrite only `server_url` and `token`, plus `spaces` on a first run. Your
-`poll_interval`, `ignore_patterns` and `selective_sync` are read, kept and written back
-untouched.
+`poll_interval` and `ignore` are read, kept and written back untouched.
 
 ## Configuration
 
@@ -101,8 +100,8 @@ token: your-api-token
 spaces:
   personal: ~/Brain
   FacileShared: ~/Nuage
-poll_interval: 30
-ignore_patterns:
+poll_interval: 10
+ignore:
   - ".DS_Store"
   - "*.tmp"
   - ".git/"
@@ -113,8 +112,8 @@ ignore_patterns:
 | `server_url` | Base URL prefixed to every request. Must reach the API, `/api` included |
 | `token` | Nuage API token, sent as `Authorization: Bearer <token>` |
 | `spaces` | Space name to local directory. The daemon syncs every pair, each into its own directory with its own state database. `~` is expanded |
-| `poll_interval` | Seconds between server polls in the daemon. Defaults to `30` |
-| `ignore_patterns` | Globs excluded from sync. `.nuage/` is always added |
+| `poll_interval` | Seconds between server polls in the daemon. Defaults to `10` |
+| `ignore` | Globs excluded from sync. `.nuage/` is always added |
 
 A config with no `spaces:` block is refused when `sync` or the daemon runs, with
 `no spaces mapped`. The pre-0.8.0 `sync_dir` key is no longer read: move its value under
@@ -130,7 +129,7 @@ instance. Precedence is flag, then environment, then file, then built-in default
 | `NUAGE_SERVER_URL` | `server_url` |
 | `NUAGE_SPACE` | The space the read commands act on, for one run. Takes a space name or an id |
 
-Full reference, including `selective_sync` and the on-disk layout:
+Full reference, including the on-disk layout:
 [docs/configuration.md](docs/configuration.md).
 
 ## Structure

@@ -50,7 +50,7 @@ pub async fn resolve_targets(config: &Config) -> Result<Targets> {
 pub fn build_engine(config: &Config, target: SyncTarget) -> Result<SyncEngine> {
     let api = ApiClient::new(&config.server_url, &config.token, target.space)?;
     let state = SyncState::new(&target.dir)?;
-    let ignore = IgnoreRules::new(config.ignore_patterns.clone());
+    let ignore = IgnoreRules::new(config.ignore.clone());
     Ok(SyncEngine::new(config.clone(), api, state, ignore, target))
 }
 

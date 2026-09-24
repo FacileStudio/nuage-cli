@@ -11,6 +11,25 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+### Changed
+
+- **`poll_interval` defaults to 10 seconds rather than 30.** Halves the worst
+  case before a change made elsewhere reaches disk. A config that writes its own
+  `poll_interval` is untouched.
+- **`ignore_patterns` is now `ignore`.** The old spelling is still read, and is
+  written back as `ignore`, so an existing config keeps its patterns and moves
+  over on the next write.
+
+### Removed
+
+- **`selective_sync` is gone.** The key filtered each space to a list of server
+  path prefixes, globally rather than per space, which made it the wrong shape
+  for a config where a target is a space and a directory. A space you only want
+  part of is better served by mapping it nowhere. The key is no longer read and
+  is not an error: a config still carrying it parses, and that target now syncs
+  its whole space, so a config relying on it must be edited rather than left
+  alone.
+
 ### Fixed
 
 - **`nuage upgrade` replaced a binary nothing ran.** `cargo install` defaults to

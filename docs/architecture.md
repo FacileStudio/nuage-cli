@@ -82,9 +82,7 @@ channel.
 
 1. **Fetch remote changes.** With no cursor, `GET /sync/state` returns the whole tree. With a
    cursor, `GET /sync/changes?since=<cursor>` returns changed and deleted files and folders.
-2. **Filter to this target's space,** then apply selective sync if `selective_sync` is
-   non-empty: folder paths are reconstructed from the change set and anything outside the
-   selected prefixes is dropped.
+2. **Filter to this target's space,** so a change belonging to another one is dropped.
 3. **Create folders** locally, topologically sorted so parents exist before children.
 4. **Delete locally** anything the server reports as deleted.
 5. **Download changed files,** four at a time behind a `tokio::sync::Semaphore`, writing to a

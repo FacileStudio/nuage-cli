@@ -15,14 +15,13 @@ token: your-api-token
 spaces:
   personal: ~/Brain
   FacileShared: ~/Nuage
-poll_interval: 30
-ignore_patterns:
+poll_interval: 10
+ignore:
   - ".DS_Store"
   - "*.tmp"
   - ".nuage/"
   - "Thumbs.db"
   - ".git/"
-selective_sync: []
 ```
 
 | Key | Required | Default | What it does |
@@ -30,9 +29,8 @@ selective_sync: []
 | `server_url` | yes | none | Base URL for every request. Trailing `/` trimmed. Empty fails validation |
 | `token` | yes | none | Bearer token. Empty fails validation |
 | `spaces` | no | empty | Space name to local directory. The daemon syncs every pair. `~` expanded via `shellexpand` |
-| `poll_interval` | no | `30` | Seconds between server polls in the sync loop |
-| `ignore_patterns` | no | `[]` | Globs excluded from sync |
-| `selective_sync` | no | `[]` | Path prefixes to sync. Empty means everything |
+| `poll_interval` | no | `10` | Seconds between server polls in the sync loop |
+| `ignore` | no | `[]` | Globs excluded from sync |
 
 Validation runs at load, after the environment overrides below are applied: malformed YAML, an
 empty `server_url` or an empty `token` all fail before anything touches the network. A missing
@@ -100,15 +98,8 @@ directory. A pattern matches if any of these hold:
 - it ends in `/` and the path is that directory or anything under it
 
 `.nuage/` and `.nuage/**` are appended automatically in `IgnoreRules::new` unless already
-present, so the state database can never sync itself. `ignore_patterns` stays global and is
-applied to every target.
-
-## Selective sync
-
-`selective_sync` is a list of path prefixes. When it is non-empty, `full_sync` reconstructs
-each remote folder's path and keeps only entries matching one of the prefixes; everything else
-is skipped for both folders and files. When it is empty, the whole tree syncs. It stays global
-and is applied per target. `nuage status` prints the active list.
+present, so the state database can never sync itself. `ignore` stays global and is applied to
+every target. The key used to be `ignore_patterns`; that spelling is still read.
 
 ## Environment variables
 

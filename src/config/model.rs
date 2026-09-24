@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use super::env::{env_server_url, env_token};
 
 fn default_poll_interval() -> u64 {
-    30
+    10
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,10 +24,8 @@ pub struct Config {
     pub spaces: BTreeMap<String, String>,
     #[serde(default = "default_poll_interval")]
     pub poll_interval: u64,
-    #[serde(default)]
-    pub ignore_patterns: Vec<String>,
-    #[serde(default)]
-    pub selective_sync: Vec<String>,
+    #[serde(default, alias = "ignore_patterns")]
+    pub ignore: Vec<String>,
 }
 
 /// A config nobody has written yet: the same field values the serde defaults
@@ -39,8 +37,7 @@ impl Default for Config {
             token: String::new(),
             spaces: BTreeMap::new(),
             poll_interval: default_poll_interval(),
-            ignore_patterns: Vec::new(),
-            selective_sync: Vec::new(),
+            ignore: Vec::new(),
         }
     }
 }
@@ -59,8 +56,8 @@ impl Config {
     /// `login` and `logout` need this: refusing to run because the very field
     /// they are about to write is missing would make the config unrepairable by
     /// the command that exists to repair it. It is also the read half of the
-    /// read-modify-write that keeps `ignore_patterns` and `selective_sync` —
-    /// which belong to the user, not to the login — intact.
+    /// read-modify-write that keeps `ignore` — which belongs to the user, not
+    /// to the login — intact.
     pub fn load_or_default() -> Result<Self> {
         let path = Self::path()?;
         match std::fs::read_to_string(&path) {

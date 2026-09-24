@@ -6,8 +6,7 @@ fn sample() -> Config {
         token: "tok".to_string(),
         spaces: std::collections::BTreeMap::new(),
         poll_interval: default_poll_interval(),
-        ignore_patterns: vec![],
-        selective_sync: vec![],
+        ignore: vec![],
     }
 }
 
@@ -39,13 +38,25 @@ fn rejects_a_bad_server_url() {
 #[test]
 fn a_partial_file_keeps_the_user_settings_it_does_have() {
     let parsed: Config = serde_yaml::from_str(
-        "server_url: https://nuage.example.com/api\nspaces:\n  personal: ~/Cloud\nselective_sync:\n  - Docs\n",
+        "server_url: https://nuage.example.com/api\nspaces:\n  personal: ~/Cloud\npoll_interval: 45\nignore:\n  - \"*.tmp\"\n",
     )
     .unwrap();
     assert_eq!(parsed.token, "");
     assert_eq!(parsed.spaces["personal"], "~/Cloud");
-    assert_eq!(parsed.selective_sync, vec!["Docs".to_string()]);
-    assert_eq!(parsed.poll_interval, default_poll_interval());
+    assert_eq!(parsed.poll_interval, 45);
+    assert_eq!(parsed.ignore, vec!["*.tmp".to_string()]);
+}
+
+// `ignore` was `ignore_patterns` before. Dropping the key silently instead of
+// reading it would unship every pattern a config already carries, which is
+// enough to start uploading `.git/` and `.DS_Store`.
+#[test]
+fn the_old_ignore_key_is_still_read() {
+    let parsed: Config = serde_yaml::from_str(
+        "server_url: https://nuage.example.com/api\nignore_patterns:\n  - \".git/\"\n",
+    )
+    .unwrap();
+    assert_eq!(parsed.ignore, vec![".git/".to_string()]);
 }
 
 // An empty map means nothing is configured to sync. The refusal for that lives

@@ -75,8 +75,8 @@ Login also falls back to it on its own when a browser cannot be opened, unless t
 reports `sso_only`, in which case there is nothing to fall back to and it says so.
 
 **What is preserved.** Login is a read-modify-write. Only `server_url`, `token` and, on a first
-run, `spaces` change; `poll_interval`, `ignore_patterns` and `selective_sync` are read from the
-existing file and written back as they were. The sync directory and the default ignore list are
+run, `spaces` change; `poll_interval` and `ignore` are read from the existing file and written
+back as they were. The sync directory and the default ignore list are
 only prompted for and seeded when there is no config file at all.
 
 The connection is tested with `GET /sync/state` before anything is written, so a bad token
@@ -220,8 +220,7 @@ FacileShared  /Users/you/Nuage
 
 One block per sync target, each naming its space and its directory. `Last sync` is that
 target's stored cursor, or `never`. With no state database yet a target reports zero files and
-folders. A non-empty `selective_sync` is listed on an extra line, and quarantined files are
-listed per target with the reason and the number of failures.
+folders. Quarantined files are listed per target with the reason and the number of failures.
 
 ## Spaces
 

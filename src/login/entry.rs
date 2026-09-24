@@ -38,7 +38,7 @@ pub async fn run(server: Option<String>, force_token: bool) -> Result<()> {
     config.token = token;
     if fresh {
         config.spaces.insert(PERSONAL.to_string(), ask_sync_dir()?);
-        config.ignore_patterns = DEFAULT_IGNORE.iter().map(|p| p.to_string()).collect();
+        config.ignore = DEFAULT_IGNORE.iter().map(|p| p.to_string()).collect();
     }
 
     finish_login(&config).await

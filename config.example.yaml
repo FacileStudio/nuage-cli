@@ -3,8 +3,8 @@ token: your-api-token-here
 spaces:
   personal: ~/Brain
   FacileShared: ~/Nuage
-poll_interval: 30
-ignore_patterns:
+poll_interval: 10
+ignore:
   - ".DS_Store"
   - "*.tmp"
   - ".nuage/"
