@@ -23,7 +23,7 @@ impl SyncEngine {
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64);
 
-        self.state.upsert_file(&UpsertFile {
+        let replaced = self.state.upsert_file(&UpsertFile {
             facile_id: api_file.id.to_string(),
             name: api_file.name.clone(),
             local_path: relative.to_string(),
@@ -33,7 +33,16 @@ impl SyncEngine {
             remote_updated_at: Some(api_file.updated_at.clone()),
             local_modified_at: local_mtime,
             synced_at: now,
-        })
+        })?;
+
+        for stale in replaced {
+            warn!(
+                "{} was tracked at {} — that copy is no longer tracked",
+                relative, stale
+            );
+        }
+
+        Ok(())
     }
 
     /// Uploads a changed file as a new version of the existing server-side object, so its

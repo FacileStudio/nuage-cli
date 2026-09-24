@@ -65,10 +65,11 @@ fn clear_failure_resets_attempts() {
 #[test]
 fn all_files_returns_every_tracked_path() {
     let state = state();
-    for path in ["a/one.md", "a/b/two.md", "three.md"] {
+    for (facile_id, path) in [("one", "a/one.md"), ("two", "a/b/two.md"), ("three", "three.md")]
+    {
         state
             .upsert_file(&UpsertFile {
-                facile_id: "id".to_string(),
+                facile_id: facile_id.to_string(),
                 name: "name".to_string(),
                 local_path: path.to_string(),
                 synced_at: "now".to_string(),

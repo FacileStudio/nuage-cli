@@ -11,7 +11,7 @@ local state database, and every endpoint it consumes.
        ┌───────────────────────┴──────────────────────────────┐
        ▼                                                      ▼
   nuage daemon (forked)                            nuage <one-shot command>
-   one thread per mapped space                       ls / search / share
+   one thread per mapped space                       search / share
     ├─ FsWatcher ─▶ local changes (2s debounce)     spaces list|create|rename|rm
     ├─ poll timer ─▶ remote changes (poll_interval) token / keys
     └─ SyncEngine, scoped to its space                       │
@@ -90,11 +90,37 @@ channel.
 5. **Download changed files,** four at a time behind a `tokio::sync::Semaphore`, writing to a
    `.nuage-tmp` sibling and renaming into place (mode `0644` on Unix).
 6. **Upload untracked local files** that the state DB has never seen.
-7. **Store the server's `server_time`** as the new cursor.
+7. **Store the server's `server_time`** as the new cursor, unless the pass failed or skipped
+   anything: the feed only answers from the cursor onwards, so advancing past an item that did
+   not apply would hide it for good.
 
 The report counts downloads, uploads, local and remote deletions, conflicts and folders
 created. `nuage sync` runs every target and prefixes each report line with its name; if any
 target failed, the command exits `1`.
+
+`SyncEngine::verify_remote` runs the same steps without the cursor and without the local
+upload half: `GET /sync/state` for the whole tree, then folder materialisation and file
+downloads. `nuage sync --verify` runs it before the pass, and the daemon runs it once at
+startup.
+
+## Identity and the local path
+
+The server identifies a file or folder by `facile_id`; the local state tables are keyed by
+`local_path`. Recording an object is therefore an identity operation, not a path insert:
+
+- `upsert_folder` and `upsert_file` drop any other row for the same `facile_id`, so one remote
+  object can never be tracked at two paths.
+- `get_folder_by_facile_id` and `get_file_by_facile_id` read the oldest row for the id, which is
+  where the content first landed, so a duplicate a legacy database holds still resolves the same
+  way every pass.
+- `reparent_folders` and `reparent_files` shift a whole subtree of rows onto a new path.
+
+Before recording a folder, the engine compares the path the server gives it with the one its row
+holds. A difference means the folder was re-parented or renamed on the server, so the local
+directory is renamed onto the new path and the rows follow. A destination that holds files this
+sync did not put there is refused, and the folder is retried on a later pass. An empty directory
+left at a destination by an earlier pass is cleared to make room, and an empty directory left by
+a dropped duplicate row is removed rather than uploaded as a new folder.
 
 ## Conflict resolution
 
@@ -185,7 +211,7 @@ strips one, so `server_url` normally ends in `/api`. See
 
 ## Path resolution
 
-`ls`, `share` and `search --folder` take human paths like `/Documents/report.pdf`. `resolve_path`
+`share` and `search --folder` take human paths like `/Documents/report.pdf`. `resolve_path`
 walks them one segment at a time: root folders come from `GET /folders`, then each subsequent
 segment is looked up in that folder's detail response. The result is `Root`, `Folder` or `File`,
 and each command rejects the combinations that make no sense. That means a deep path costs one

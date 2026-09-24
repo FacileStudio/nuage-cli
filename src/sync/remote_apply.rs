@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -62,22 +62,13 @@ impl SyncEngine {
             return Ok(None);
         }
 
-        let local_path = match self.resolve_file_path(file).await? {
-            Some(p) => p,
-            None => {
-                warn!(
-                    "skipping file {} — its folder could not be resolved",
-                    file.name
-                );
-                self.note_failure(&facile_id, "unresolved parent folder", report)?;
-                return Ok(None);
-            }
+        let Some((local_path, relative)) = self.resolve_local_target(file, report).await? else {
+            return Ok(None);
         };
 
-        let relative = match self.relative_path(&local_path) {
-            Some(r) => r,
-            None => return Ok(None),
-        };
+        if self.follow_remote_move(file, &relative, report)? {
+            return Ok(None);
+        }
 
         if local_path.exists() && !self.remote_version_wins(file, &relative, &local_path, report)? {
             return Ok(None);
@@ -90,6 +81,31 @@ impl SyncEngine {
         }
 
         Ok(Some((file.clone(), local_path)))
+    }
+
+    /// Resolves where a remote file belongs locally, recording a failure against
+    /// the file when its parent folder cannot be placed.
+    async fn resolve_local_target(
+        &self,
+        file: &ApiFile,
+        report: &mut SyncReport,
+    ) -> Result<Option<(PathBuf, String)>> {
+        let local_path = match self.resolve_file_path(file).await? {
+            Some(path) => path,
+            None => {
+                warn!(
+                    "skipping file {} — its folder could not be resolved",
+                    file.name
+                );
+                self.note_failure(&file.id.to_string(), "unresolved parent folder", report)?;
+                return Ok(None);
+            }
+        };
+
+        match self.relative_path(&local_path) {
+            Some(relative) => Ok(Some((local_path, relative))),
+            None => Ok(None),
+        }
     }
 
     fn remote_version_wins(
@@ -129,35 +145,6 @@ impl SyncEngine {
                 self.keep_conflict_copy(relative, local_path, &conflict_path, report)
             }
         }
-    }
-
-    fn keep_conflict_copy(
-        &self,
-        relative: &str,
-        local_path: &Path,
-        conflict_path: &Path,
-        report: &mut SyncReport,
-    ) -> Result<bool> {
-        if self.options.dry_run {
-            report.planned.push(format!(
-                "conflict on {} — local copy would move to {}",
-                relative,
-                conflict_path.display()
-            ));
-            return Ok(false);
-        }
-
-        std::fs::rename(local_path, conflict_path)
-            .with_context(|| format!("cannot preserve conflicting local copy of {}", relative))?;
-
-        let kept_as = conflict_path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        warn!("conflict on {} — local copy kept as {}", relative, kept_as);
-        report.conflicts += 1;
-
-        Ok(true)
     }
 
     async fn collect_downloads(

@@ -1,6 +1,7 @@
 mod cursor;
 mod files;
 mod folders;
+mod identity;
 mod quarantine;
 mod rows;
 mod schema;

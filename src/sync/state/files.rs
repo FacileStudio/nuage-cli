@@ -22,7 +22,14 @@ impl SyncState {
         }
     }
 
-    pub fn upsert_file(&self, record: &UpsertFile) -> Result<()> {
+    /// Records a file at `record.local_path` and returns the paths it was tracked
+    /// at before, if any.
+    ///
+    /// A remote file owns exactly one row: recording it somewhere else moves its
+    /// identity there rather than adding a second row beside the first.
+    pub fn upsert_file(&self, record: &UpsertFile) -> Result<Vec<String>> {
+        let replaced = self.drop_file_duplicates(&record.facile_id, &record.local_path)?;
+
         self.db
             .execute(
                 "INSERT INTO files (facile_id, name, local_path, hash, size, folder_id, \
@@ -44,7 +51,8 @@ impl SyncState {
                 ],
             )
             .context("failed to upsert file record")?;
-        Ok(())
+
+        Ok(replaced)
     }
 
     pub fn remove_file(&self, local_path: &str) -> Result<()> {
@@ -80,11 +88,14 @@ impl SyncState {
         }
     }
 
+    /// The oldest row for a file id, which is the path the file was first written
+    /// to. The `ORDER BY` makes that deterministic rather than whichever row the
+    /// query planner reached first. See [`SyncState::get_folder_by_facile_id`].
     pub fn get_file_by_facile_id(&self, facile_id: &str) -> Result<Option<FileRecord>> {
         let mut stmt = self
             .db
             .prepare(&format!(
-                "SELECT {FILE_COLUMNS} FROM files WHERE facile_id = ?1"
+                "SELECT {FILE_COLUMNS} FROM files WHERE facile_id = ?1 ORDER BY id LIMIT 1"
             ))
             .context("failed to prepare file query by facile_id")?;
 

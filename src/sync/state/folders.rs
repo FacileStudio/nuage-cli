@@ -43,7 +43,15 @@ impl SyncState {
         }
     }
 
-    pub fn upsert_folder(&self, record: &UpsertFolder) -> Result<()> {
+    /// Records a folder at `record.local_path` and returns the paths it was
+    /// tracked at before, if any.
+    ///
+    /// A remote folder owns exactly one row: recording it somewhere else moves
+    /// its identity there rather than adding a second row beside the first.
+    pub fn upsert_folder(&self, record: &UpsertFolder) -> Result<Vec<String>> {
+        let replaced =
+            self.drop_folder_duplicates(&record.facile_id, &record.local_path)?;
+
         self.db
             .execute(
                 "INSERT INTO folders (facile_id, name, local_path, parent_id, remote_updated_at, synced_at) \
@@ -60,7 +68,8 @@ impl SyncState {
                 ],
             )
             .context("failed to upsert folder record")?;
-        Ok(())
+
+        Ok(replaced)
     }
 
     pub fn remove_folder(&self, local_path: &str) -> Result<()> {
@@ -79,11 +88,17 @@ impl SyncState {
             .context("failed to count folders")
     }
 
+    /// The oldest row for a folder id, which is the path the folder was first
+    /// materialised at and therefore where its content lives.
+    ///
+    /// The `ORDER BY` is what makes that deterministic. Unordered, a duplicate
+    /// row for the same id made this a coin flip, and the loser of that flip was
+    /// the path every file under the folder was then written to.
     pub fn get_folder_by_facile_id(&self, facile_id: &str) -> Result<Option<FolderRecord>> {
         let mut stmt = self
             .db
             .prepare(&format!(
-                "SELECT {FOLDER_COLUMNS} FROM folders WHERE facile_id = ?1"
+                "SELECT {FOLDER_COLUMNS} FROM folders WHERE facile_id = ?1 ORDER BY id LIMIT 1"
             ))
             .context("failed to prepare folder query by facile_id")?;
 

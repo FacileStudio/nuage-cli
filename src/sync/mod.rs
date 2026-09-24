@@ -7,8 +7,10 @@ pub mod watcher;
 mod apply_local;
 mod deletions;
 mod folders;
+mod pass;
 mod push;
 mod reconcile;
+mod relocate;
 mod remote_apply;
 mod remote_delete;
 mod remote_folders;
@@ -19,7 +21,6 @@ mod selective;
 #[cfg(test)]
 mod tests;
 
-use anyhow::Result;
 use std::path::PathBuf;
 
 use crate::api::ApiClient;
@@ -91,32 +92,5 @@ impl SyncEngine {
 
     pub fn config(&self) -> &Config {
         &self.config
-    }
-
-    pub async fn full_sync(&self) -> Result<SyncReport> {
-        let mut report = SyncReport::default();
-
-        let changes =
-            remote::fetch_remote_changes(&self.api, &self.state, self.target.space).await?;
-
-        let (folders_to_sync, files_to_sync) =
-            self.apply_selective_sync(changes.changed_folders, changes.changed_files);
-
-        report.folders_created += self
-            .process_remote_folders(&folders_to_sync, &mut report)
-            .await?;
-
-        self.remove_deleted_remote_folders(&changes.deleted_folder_ids, &mut report);
-        self.process_remote_files(&files_to_sync, &mut report)
-            .await?;
-        self.remove_deleted_remote_files(&changes.deleted_file_ids, &mut report);
-
-        self.reconcile_local(&mut report).await?;
-
-        if !self.options.dry_run {
-            self.state.set_cursor(&changes.server_time)?;
-        }
-
-        Ok(report)
     }
 }

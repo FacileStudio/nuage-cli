@@ -35,16 +35,46 @@ impl SyncEngine {
         Ok(())
     }
 
-    pub(super) fn record_folder(&self, folder: &ApiFolder, relative: &str) -> Result<()> {
+    /// Records a folder at `relative`, first moving its local directory there if
+    /// the row it already has points somewhere else, and creating the directory.
+    ///
+    /// Returns false when the folder could not be placed: the destination holds
+    /// files this sync did not put there, so moving onto it would destroy them.
+    /// The caller leaves the folder for a later pass rather than recording a path
+    /// the filesystem does not agree with.
+    pub(super) fn record_folder(&self, folder: &ApiFolder, relative: &str) -> Result<bool> {
+        if let Some(record) = self.state.get_folder_by_facile_id(&folder.id.to_string())? {
+            if record.local_path != relative {
+                if !self.relocate_local_folder(&record.local_path, relative)? {
+                    warn!(
+                        "cannot move folder {} to {} — the destination holds unwatched files",
+                        record.local_path, relative
+                    );
+                    return Ok(false);
+                }
+                info!("↻ moved folder {} → {}", record.local_path, relative);
+            }
+        }
+
+        let local_path = self.target.dir.join(relative);
+        std::fs::create_dir_all(&local_path)
+            .with_context(|| format!("cannot create folder: {}", local_path.display()))?;
+
         let now = chrono::Utc::now().to_rfc3339();
-        self.state.upsert_folder(&UpsertFolder {
+        let replaced = self.state.upsert_folder(&UpsertFolder {
             facile_id: folder.id.to_string(),
             name: folder.name.clone(),
             local_path: relative.to_string(),
             parent_id: folder.parent_id,
             remote_updated_at: Some(folder.updated_at.clone()),
             synced_at: now,
-        })
+        })?;
+
+        for path in replaced {
+            self.remove_empty_dir(&path);
+        }
+
+        Ok(true)
     }
 
     pub(super) fn find_parent_folder_id(&self, relative_path: &str) -> Result<Option<i64>> {
@@ -128,18 +158,11 @@ impl SyncEngine {
 
         let relative = join_relative(&parent_path, &detail.folder.name);
 
-        if !self.options.dry_run {
-            self.materialize_local_folder(&detail.folder, &relative)?;
+        if !self.options.dry_run && !self.record_folder(&detail.folder, &relative)? {
+            return Ok(None);
         }
 
         Ok(Some(relative))
-    }
-
-    fn materialize_local_folder(&self, folder: &ApiFolder, relative: &str) -> Result<()> {
-        let local_path = self.target.dir.join(relative);
-        std::fs::create_dir_all(&local_path)
-            .with_context(|| format!("cannot create folder: {}", local_path.display()))?;
-        self.record_folder(folder, relative)
     }
 }
 

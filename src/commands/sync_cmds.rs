@@ -22,6 +22,11 @@ pub struct SyncArgs {
         help = "Drop tracking records whose local file is gone, without deleting anything on the server, then re-enumerate"
     )]
     pub repair_state: bool,
+    #[arg(
+        long,
+        help = "Re-read the whole space before syncing, to recover anything the incremental feed lost track of"
+    )]
+    pub verify: bool,
 }
 
 fn report_warnings(report: &sync::SyncReport) {
@@ -98,6 +103,10 @@ async fn sync_target(config: &Config, target: SyncTarget, args: &SyncArgs) -> Re
     }
     if args.repair_state {
         repair::repair_state(&engine, args.dry_run)?;
+    }
+    if args.verify {
+        ui::step("Verifying the whole space against the local directory");
+        engine.verify_remote().await?;
     }
 
     engine.full_sync().await

@@ -83,6 +83,16 @@ async fn run_local(engine: &SyncEngine, paths: Vec<std::path::PathBuf>) {
 }
 
 async fn initial_sync(engine: &SyncEngine) {
+    match engine.verify_remote().await {
+        Ok(report) if report.total_changes() > 0 => info!(
+            "{}: verified {} change(s) the incremental feed had lost",
+            engine.target().name,
+            report.total_changes()
+        ),
+        Ok(_) => {}
+        Err(e) => error!("{}: verification failed: {e:#}", engine.target().name),
+    }
+
     match engine.full_sync().await {
         Ok(report) => {
             info!(

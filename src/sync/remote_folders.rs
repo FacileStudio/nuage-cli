@@ -1,6 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::{HashMap, VecDeque};
-use std::path::Path;
 use tracing::warn;
 
 use super::{SyncEngine, SyncReport};
@@ -33,7 +32,7 @@ impl SyncEngine {
                 None => continue,
             };
 
-            if self.materialize_remote_folder(folder, &local_path, &relative, report)? {
+            if self.materialize_remote_folder(folder, &relative, report)? {
                 count += 1;
             }
         }
@@ -44,22 +43,21 @@ impl SyncEngine {
     fn materialize_remote_folder(
         &self,
         folder: &ApiFolder,
-        local_path: &Path,
         relative: &str,
         report: &mut SyncReport,
     ) -> Result<bool> {
         if self.options.dry_run {
-            if local_path.exists() {
+            if self.target.dir.join(relative).exists() {
                 return Ok(false);
             }
             report.planned.push(format!("create folder {}", relative));
             return Ok(true);
         }
 
-        std::fs::create_dir_all(local_path)
-            .with_context(|| format!("cannot create folder: {}", local_path.display()))?;
-
-        self.record_folder(folder, relative)?;
+        if !self.record_folder(folder, relative)? {
+            report.errors += 1;
+            return Ok(false);
+        }
         Ok(true)
     }
 

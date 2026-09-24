@@ -75,6 +75,18 @@ fn from_changes(resp: crate::api::SyncChangesResponse, space: Option<i64>) -> Re
     }
 }
 
+/// Reads the space's whole tree, for the verification pass.
+///
+/// The same endpoints the cursor is built from, read without a `since`, so this
+/// answers what the space holds rather than what changed in it.
+pub(super) async fn fetch_remote_tree(
+    api: &ApiClient,
+    space: Option<i64>,
+) -> Result<(Vec<ApiFolder>, Vec<ApiFile>)> {
+    let changes = from_state(api.sync_state().await?, space);
+    Ok((changes.changed_folders, changes.changed_files))
+}
+
 fn deleted_ids(items: Vec<DeletedItem>, space: Option<i64>) -> Vec<i64> {
     items
         .into_iter()
