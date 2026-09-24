@@ -11,6 +11,8 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-24
+
 ### Added
 
 - **`key_command` reads the token from a command.** A config can name a command
@@ -323,7 +325,9 @@ by putting files in a space's mapped directory.
   them.
 - The daemon guards against PID 0 and stops creating a directory twice.
 
-[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/FacileStudio/nuage-cli/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/FacileStudio/nuage-cli/compare/v0.7.0...v0.7.1
