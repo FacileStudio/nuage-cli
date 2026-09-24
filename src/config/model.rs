@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use super::env::{env_server_url, env_token};
+use super::key_command::run_key_command;
 
 fn default_poll_interval() -> u64 {
     10
@@ -26,6 +27,13 @@ pub struct Config {
     pub poll_interval: u64,
     #[serde(default, alias = "ignore_patterns")]
     pub ignore: Vec<String>,
+    /// A command whose standard output is the token.
+    ///
+    /// This exists so the credential can stay out of the file: the command reads
+    /// it from a secret manager, a password store or a vault, and the config
+    /// records only how to ask. It outranks `token`, and an env var outranks it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key_command: String,
 }
 
 /// A config nobody has written yet: the same field values the serde defaults
@@ -38,6 +46,7 @@ impl Default for Config {
             spaces: BTreeMap::new(),
             poll_interval: default_poll_interval(),
             ignore: Vec::new(),
+            key_command: String::new(),
         }
     }
 }
@@ -45,6 +54,7 @@ impl Default for Config {
 impl Config {
     pub fn load() -> Result<Self> {
         let mut config = Self::load_or_default()?;
+        config.apply_key_command()?;
         config.apply_env()?;
         config.validate()?;
         Ok(config)
@@ -68,9 +78,24 @@ impl Config {
         }
     }
 
-    /// Precedence is flag > environment > config file > built-in default. The
-    /// flags are handled by the commands that take them, so by the time this
-    /// runs the environment is the highest authority left.
+    /// Runs `key_command`, when the file names one, and takes its output as the
+    /// token.
+    ///
+    /// It replaces whatever `token` holds: a config carrying both means the
+    /// plaintext value is the leftover, and letting it win would keep using a
+    /// credential the command was added to retire. It runs before `apply_env`,
+    /// so an env var still has the last word.
+    fn apply_key_command(&mut self) -> Result<()> {
+        if self.key_command.is_empty() {
+            return Ok(());
+        }
+        self.token = run_key_command(&self.key_command)?;
+        Ok(())
+    }
+
+    /// Precedence is flag > environment > key_command > config file > built-in
+    /// default. The flags are handled by the commands that take them, so by the
+    /// time this runs the environment is the highest authority left.
     fn apply_env(&mut self) -> Result<()> {
         if let Some(url) = env_server_url() {
             self.server_url = url;
@@ -88,7 +113,9 @@ impl Config {
             );
         }
         if self.token.is_empty() {
-            bail!("not signed in — run `nuage login`, or set NUAGE_TOKEN");
+            bail!(
+                "not signed in — run `nuage login`, set NUAGE_TOKEN, or name a key_command in ~/.nuage.yml"
+            );
         }
         if !is_http_url(&self.server_url) {
             bail!(

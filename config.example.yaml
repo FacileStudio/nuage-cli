@@ -1,5 +1,6 @@
 server_url: https://nuage.example.com
 token: your-api-token-here
+# key_command: casier get nuage
 spaces:
   personal: ~/Brain
   FacileShared: ~/Nuage

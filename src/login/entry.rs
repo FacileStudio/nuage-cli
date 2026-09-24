@@ -64,6 +64,9 @@ pub fn logout() -> Result<()> {
     if config::env_token().is_some() {
         ui::warn("NUAGE_TOKEN is still set in this environment and overrides the config file");
     }
+    if !config.key_command.is_empty() {
+        ui::warn("key_command is still set in ~/.nuage.yml and supplies the token from a command");
+    }
     Ok(())
 }
 

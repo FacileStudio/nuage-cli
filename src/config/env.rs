@@ -1,9 +1,15 @@
+/// Checked in order, first non-empty wins.
+const TOKEN_VARS: [&str; 3] = ["NUAGE_TOKEN", "NUAGE_API_KEY", "NUAGE_KEY"];
+
 /// The credential, when the environment supplies one.
 ///
 /// CI cannot run an interactive login and must not commit a config file, so an
-/// env var is the only credential channel it has.
+/// env var is the only credential channel it has. `NUAGE_TOKEN` came first and
+/// stays the documented name; the other two are accepted because they are the
+/// names people reach for, and a credential channel that answers to one spelling
+/// only fails in a way that reads as a bad token.
 pub fn env_token() -> Option<String> {
-    non_empty("NUAGE_TOKEN")
+    TOKEN_VARS.iter().find_map(|key| non_empty(key))
 }
 
 /// The instance, when the environment supplies one.

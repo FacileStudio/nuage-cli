@@ -11,6 +11,17 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+### Added
+
+- **`key_command` reads the token from a command.** A config can name a command
+  whose standard output is the token, so the credential stays in a secret manager
+  and the file records only how to ask (`casier get nuage`, `op read
+  op://vault/nuage/token`). It runs through `sh -c`, its output is trimmed, and a
+  command that fails or prints nothing is an error naming the command rather than
+  a silent fallback. It outranks `token`; an env var outranks it.
+- **`NUAGE_API_KEY` and `NUAGE_KEY` are accepted as token variables**, alongside
+  the existing `NUAGE_TOKEN`. The first non-empty one wins, in that order.
+
 ### Changed
 
 - **`poll_interval` defaults to 10 seconds rather than 30.** Halves the worst

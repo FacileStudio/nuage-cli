@@ -16,6 +16,7 @@ it in that space's mapped directory and it syncs.
 - Filesystem watching with a 2-second debounce, plus a configurable server poll
 - Conflict resolution using the last known hash, keeping both copies when it cannot decide
 - Glob ignore patterns
+- The token from `~/.nuage.yml`, an env var, or a command you name, so it can stay in a secret manager
 - Remote reads with `search`, and share links with view or edit permission and an expiry
 - API token and API key management, and `--json` on every non-daemon command
 
@@ -87,7 +88,7 @@ API and paste it at the prompt. Login also falls back to it on its own if a brow
 opened and the instance permits it.
 
 Both commands rewrite only `server_url` and `token`, plus `spaces` on a first run. Your
-`poll_interval` and `ignore` are read, kept and written back untouched.
+`poll_interval`, `ignore` and `key_command` are read, kept and written back untouched.
 
 ## Configuration
 
@@ -97,6 +98,7 @@ All configuration lives in `~/.nuage.yml`, written by `nuage login` or by hand. 
 ```yaml
 server_url: https://nuage.facile.studio/api
 token: your-api-token
+# key_command: casier get nuage
 spaces:
   personal: ~/Brain
   FacileShared: ~/Nuage
@@ -111,6 +113,7 @@ ignore:
 |---|---|
 | `server_url` | Base URL prefixed to every request. Must reach the API, `/api` included |
 | `token` | Nuage API token, sent as `Authorization: Bearer <token>` |
+| `key_command` | A command whose standard output is the token, so the credential can stay in a secret manager. Outranks `token`; an env var outranks it |
 | `spaces` | Space name to local directory. The daemon syncs every pair, each into its own directory with its own state database. `~` is expanded |
 | `poll_interval` | Seconds between server polls in the daemon. Defaults to `10` |
 | `ignore` | Globs excluded from sync. `.nuage/` is always added |
@@ -126,6 +129,7 @@ instance. Precedence is flag, then environment, then file, then built-in default
 | Variable | Overrides |
 |---|---|
 | `NUAGE_TOKEN` | `token` |
+| `NUAGE_API_KEY`, `NUAGE_KEY` | `token`, aliases of the above |
 | `NUAGE_SERVER_URL` | `server_url` |
 | `NUAGE_SPACE` | The space the read commands act on, for one run. Takes a space name or an id |
 

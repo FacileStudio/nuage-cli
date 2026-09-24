@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 
 mod env;
+mod key_command;
 mod model;
 mod persist;
 

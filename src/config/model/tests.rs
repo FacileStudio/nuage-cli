@@ -7,6 +7,7 @@ fn sample() -> Config {
         spaces: std::collections::BTreeMap::new(),
         poll_interval: default_poll_interval(),
         ignore: vec![],
+        key_command: String::new(),
     }
 }
 
@@ -76,4 +77,5 @@ fn an_empty_spaces_map_is_absent_from_the_written_file() {
         .contains("spaces:"));
 }
 
+mod key_command;
 mod spaces;
