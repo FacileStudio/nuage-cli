@@ -43,8 +43,8 @@ cargo run                       # prints the help message and exits 0
 cargo run -- watch              # foreground watcher
 cargo run -- sync               # one-shot sync of every mapped space
 cargo run -- status
-cargo run -- ls / -l
-cargo run -- --json ls /
+cargo run -- search invoice
+cargo run -- --json search invoice
 cargo run -- --help
 ```
 

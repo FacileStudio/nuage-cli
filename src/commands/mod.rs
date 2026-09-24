@@ -1,7 +1,6 @@
 pub mod daemon_cmds;
 pub mod daemon_run;
 pub mod keys;
-pub mod ls;
 pub mod paths;
 pub mod progress;
 pub mod repair;

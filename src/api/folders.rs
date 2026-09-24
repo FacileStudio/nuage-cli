@@ -1,5 +1,5 @@
 use super::{
-    ApiClient, ApiFile, ApiFolder, FileListResponse, FolderDetailResponse, FoldersListResponse,
+    ApiClient, ApiFile, ApiFolder, FolderDetailResponse, FoldersListResponse,
     SearchApiResponse, SearchResultItem,
 };
 use anyhow::{Context, Result};
@@ -137,31 +137,6 @@ impl ApiClient {
         let list: FoldersListResponse =
             resp.json().await.context("failed to parse folders list")?;
         Ok(list.folders)
-    }
-
-    /// Files sitting at the root of the client's space.
-    ///
-    /// Separate from `sync_state`, which ignores `space_id` and therefore
-    /// answers with every space's tree merged.
-    pub async fn list_root_files(&self) -> Result<Vec<ApiFile>> {
-        let client = self.client();
-        let url = self.scoped_url(format!("{}/files", self.base_url()));
-        let token = self.token();
-
-        let resp = self
-            .send_with_retry("failed to list files", || {
-                client.get(&url).bearer_auth(token).send()
-            })
-            .await?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("GET /files failed ({}): {}", status, body);
-        }
-
-        let list: FileListResponse = resp.json().await.context("failed to parse files list")?;
-        Ok(list.files)
     }
 
     pub async fn get_folder(&self, id: i64) -> Result<FolderDetailResponse> {

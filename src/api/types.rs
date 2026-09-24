@@ -96,11 +96,6 @@ pub struct FoldersListResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileListResponse {
-    pub files: Vec<ApiFile>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FolderDetailResponse {
     pub folder: ApiFolder,
     pub files: Vec<ApiFile>,

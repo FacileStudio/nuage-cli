@@ -123,7 +123,7 @@ load. Both variables are read on every command, and either one is enough on its 
 set the CLI works with no config file at all, which is the point: a pipeline cannot run an
 interactive login and must not commit a credential.
 
-`NUAGE_SPACE` scopes the read commands (`ls`, `search`, `share`, `shares`) for one run. It does
+`NUAGE_SPACE` scopes the read commands (`search`, `share`, `shares`) for one run. It does
 not change what the daemon syncs: the daemon follows the `spaces:` map and nothing else. Use it
 to read a shared space without mapping it.
 

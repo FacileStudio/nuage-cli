@@ -2,10 +2,10 @@
 
 Sync daemon and terminal client for [Nuage](https://github.com/FacileStudio/Nuage), the
 self-hosted cloud storage app. The `nuage` binary keeps one local directory per space
-bidirectionally in sync with a Nuage server, and lists, searches and shares what is there.
+bidirectionally in sync with a Nuage server, and searches and shares what is there.
 
-Run it as a background daemon for continuous sync, or use its one-shot subcommands to list,
-search and share remote files. The daemon is the only writer: to put a file in a space, drop
+Run it as a background daemon for continuous sync, or use its one-shot subcommands to search
+and share remote files. The daemon is the only writer: to put a file in a space, drop
 it in that space's mapped directory and it syncs.
 
 ## What it does
@@ -16,7 +16,7 @@ it in that space's mapped directory and it syncs.
 - Filesystem watching with a 2-second debounce, plus a configurable server poll
 - Conflict resolution using the last known hash, keeping both copies when it cannot decide
 - Glob ignore patterns and optional selective sync of specific paths
-- Remote reads with `ls` and `search`, and share links with view or edit permission and an expiry
+- Remote reads with `search`, and share links with view or edit permission and an expiry
 - API token and API key management, and `--json` on every non-daemon command
 
 ## Stack
@@ -55,8 +55,8 @@ nuage status                       # daemon state, last sync, file counts, per s
 nuage sync                         # one-shot sync of every mapped space
 nuage spaces list                  # every space you can act in, with its sync directory
 nuage spaces create FacileShared   # create a space
-nuage ls /Documents -l
-NUAGE_SPACE=FacileShared nuage ls / # read a shared space for one command
+nuage search report
+NUAGE_SPACE=FacileShared nuage search report # read a shared space for one command
 nuage share /Documents/report.pdf -e 7d
 nuage keys list                    # list registered API keys
 nuage keys create --app myapp      # create an API key

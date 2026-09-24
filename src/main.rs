@@ -15,7 +15,6 @@ use clap::{CommandFactory, Parser, Subcommand};
 use commands::{
     daemon_cmds::{self, cmd_logs, cmd_restart, cmd_start, cmd_stop, LogsArgs},
     keys::{self, KeysCommand},
-    ls::{self, LsArgs},
     search::{self, SearchArgs},
     shares::{self, ShareArgs, UnshareArgs},
     space,
@@ -68,8 +67,6 @@ enum Command {
     Spaces(SpacesCommand),
     /// Upgrade nuage-cli
     Upgrade,
-    /// List files and folders at a remote path
-    Ls(LsArgs),
     /// Create a share link
     Share(ShareArgs),
     /// Revoke a share link
@@ -134,7 +131,6 @@ async fn dispatch(command: Command, json: bool) -> Result<()> {
         Command::Login(args) => login::run(args.server, args.token).await,
         Command::Logout => login::logout(),
         Command::Upgrade => daemon_cmds::cmd_upgrade().await,
-        Command::Ls(args) => ls::cmd_ls(&args, json).await,
         Command::Share(args) => shares::cmd_share(&args, json).await,
         Command::Unshare(args) => shares::cmd_unshare(&args, json).await,
         Command::Shares => shares::cmd_shares(json).await,

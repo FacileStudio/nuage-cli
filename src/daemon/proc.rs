@@ -119,7 +119,7 @@ mod tests {
         for args in [
             "nuage",
             "nuage sync",
-            "nuage ls /",
+            "nuage search import",
             "nuage spaces list",
             "nuagectl start",
             "/usr/bin/postgres -D /var/lib/postgresql",
