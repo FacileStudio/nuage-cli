@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Args, Subcommand};
 
 use crate::api::{ApiClient, ApiKey, CreateKeyRequest};
+use crate::commands::progress::confirm;
 use crate::commands::space::load_api;
 use crate::ui;
 
@@ -144,7 +145,12 @@ async fn keys_create(api: &ApiClient, args: &KeysCreateArgs, json: bool) -> Resu
     Ok(())
 }
 
-async fn keys_revoke(api: &ApiClient, id: i64, json: bool) -> Result<()> {
+async fn keys_revoke(api: &ApiClient, id: i64, yes: bool, json: bool) -> Result<()> {
+    if !yes && !json && !confirm(&format!("revoke key {id}?"))? {
+        ui::step("Cancelled");
+        return Ok(());
+    }
+
     api.revoke_key(id).await?;
 
     if json {
@@ -162,6 +168,6 @@ pub async fn cmd_keys(sub: KeysCommand, json: bool) -> Result<()> {
     match sub {
         KeysCommand::List(args) => keys_list(&api, &args, json).await,
         KeysCommand::Create(args) => keys_create(&api, &args, json).await,
-        KeysCommand::Revoke(args) => keys_revoke(&api, args.id, json).await,
+        KeysCommand::Revoke(args) => keys_revoke(&api, args.id, args.yes, json).await,
     }
 }
