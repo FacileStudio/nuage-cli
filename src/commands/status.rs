@@ -19,12 +19,6 @@ fn print_daemon_status() -> Result<()> {
     Ok(())
 }
 
-fn print_selective(config: &config::Config) {
-    if !config.selective_sync.is_empty() {
-        println!("Selective sync: {}", config.selective_sync.join(", "));
-    }
-}
-
 fn print_quarantine(state: &SyncState) -> Result<()> {
     let quarantined = state.list_quarantined()?;
     if quarantined.is_empty() {
@@ -69,7 +63,6 @@ pub async fn cmd_status() -> Result<()> {
 
     let config = config::Config::load()?;
     println!("Server: {}", config.server_url);
-    print_selective(&config);
 
     if config.spaces.is_empty() {
         println!("\nSpaces: none mapped — add a `spaces:` block to ~/.nuage.yml");

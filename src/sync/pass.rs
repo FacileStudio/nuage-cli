@@ -13,15 +13,13 @@ impl SyncEngine {
         let changes =
             remote::fetch_remote_changes(&self.api, &self.state, self.target.space).await?;
 
-        let (folders_to_sync, files_to_sync) =
-            self.apply_selective_sync(changes.changed_folders, changes.changed_files);
-
         report.folders_created += self
-            .process_remote_folders(&folders_to_sync, &mut report)
+            .process_remote_folders(&changes.changed_folders, &mut report)
             .await?;
 
         self.remove_deleted_remote_folders(&changes.deleted_folder_ids, &mut report);
-        self.process_remote_files(&files_to_sync, &mut report).await?;
+        self.process_remote_files(&changes.changed_files, &mut report)
+            .await?;
         self.remove_deleted_remote_files(&changes.deleted_file_ids, &mut report);
 
         self.reconcile_local(&mut report).await?;
@@ -42,7 +40,6 @@ impl SyncEngine {
     pub async fn verify_remote(&self) -> Result<SyncReport> {
         let mut report = SyncReport::default();
         let (folders, files) = remote::fetch_remote_tree(&self.api, self.target.space).await?;
-        let (folders, files) = self.apply_selective_sync(folders, files);
 
         report.folders_created += self.process_remote_folders(&folders, &mut report).await?;
         self.process_remote_files(&files, &mut report).await?;

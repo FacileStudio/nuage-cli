@@ -23,7 +23,6 @@ impl SyncEngine {
         let missing: Vec<_> = tracked
             .iter()
             .filter(|r| !on_disk.contains(&r.local_path))
-            .filter(|r| self.is_selected(&r.local_path))
             .collect();
 
         if missing.is_empty() {

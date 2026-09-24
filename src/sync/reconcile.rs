@@ -19,9 +19,7 @@ impl SyncEngine {
         for (relative, full_path) in &local_files {
             on_disk.insert(relative.clone());
 
-            if self.is_selected(relative) {
-                self.reconcile_one(relative, full_path, report).await?;
-            }
+            self.reconcile_one(relative, full_path, report).await?;
         }
 
         self.propagate_local_deletions(&on_disk, local_files.len(), report)

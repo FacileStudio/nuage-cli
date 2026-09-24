@@ -139,9 +139,6 @@ impl SyncEngine {
         folders.sort_by_key(|(rel, _)| rel.matches('/').count());
 
         for (relative, full_path) in folders {
-            if !self.is_selected(&relative) {
-                continue;
-            }
             if self.state.get_folder(&relative)?.is_some() {
                 continue;
             }
