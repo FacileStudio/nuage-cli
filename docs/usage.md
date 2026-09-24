@@ -29,7 +29,7 @@ file in a space, drop it in that space's mapped directory and it syncs; to delet
 it there. The `spaces:` block in `~/.nuage.yml` maps each space to a directory, and the daemon
 syncs every mapping in parallel.
 
-The remaining remote commands are reads: `ls`, `search`, `share`, `shares`. Nothing else writes
+The remaining remote commands are reads: `search`, `share`, `shares`. Nothing else writes
 directly to a space.
 
 ## Setup
@@ -164,6 +164,7 @@ loop, logging to the terminal. `Ctrl-C` (SIGINT) or SIGTERM shuts it down cleanl
 ```sh
 nuage sync
 nuage sync --dry-run
+nuage sync --verify
 ```
 
 One-shot sync of every mapped space, then exit. Each target's report line is prefixed with its
@@ -175,6 +176,7 @@ space name, and the command exits `1` if any target failed, even when the others
 | `--allow-bulk-delete` | Allow propagating an unusually large batch of local deletions |
 | `--retry-failed` | Clear quarantined files and retry them |
 | `--repair-state` | Drop tracking records whose local file is gone, then re-enumerate |
+| `--verify` | Re-read the whole space before syncing, to recover anything the incremental feed lost |
 
 A pass prints `[nuage] sync complete (N changes)` and, when any occurred,
 `[nuage] N conflicts resolved (local copies renamed)`. `--dry-run` prints one planned-change
@@ -182,11 +184,18 @@ line per entry instead, or `Already in sync` when there is nothing to do.
 
 A file the server refuses repeatedly is quarantined and skipped, so it cannot block the rest of
 the pass. `nuage status` lists quarantined files; `nuage sync --retry-failed` clears the
-quarantine and tries them again.
+quarantine and tries them again. While anything is quarantined, or after any item failed, the
+pass holds the sync cursor instead of advancing it, so the item stays in the next window rather
+than disappearing from it.
 
 `--repair-state` recovers from tracking that drifted out of agreement with the filesystem. It
 drops records whose local file is gone, leaves the server untouched, and forgets the cursor so
 the next pass rebuilds tracking from the server's own view.
+
+`--verify` re-reads the whole space rather than the changes since the cursor, and materialises
+anything missing locally. A normal pass only sees what the server changed since the cursor, so
+an item that was fetched and then skipped would never be offered again. The daemon runs the
+same verification once at startup.
 
 ### `nuage status`
 
@@ -225,12 +234,12 @@ commands until `NUAGE_SPACE` names it.
 it from `GET /spaces`, because it is the absence of a space rather than one of them, so the CLI
 supplies the name itself.
 
-The read commands (`ls`, `search`, `share`, `shares`) answer from your personal space unless
+The read commands (`search`, `share`, `shares`) answer from your personal space unless
 `NUAGE_SPACE` names another for that run. `NUAGE_SPACE` takes a space name or an id; a name
 costs one request to resolve, and `personal` is answered locally.
 
 ```sh
-NUAGE_SPACE=FacileShared nuage ls /Clients
+NUAGE_SPACE=FacileShared nuage search invoice -f /Clients
 NUAGE_SPACE=3 nuage search invoice
 ```
 
@@ -304,23 +313,6 @@ never prompts.
 before it resolves anything.
 
 ## Remote reads
-
-### `nuage ls`
-
-| Argument / flag | Default | What it does |
-|---|---|---|
-| `[PATH]` | `/` | Remote path to list |
-| `-l`, `--long` | off | Show size and date |
-
-```sh
-nuage ls
-nuage ls /Documents
-nuage ls /Documents -l
-nuage ls / --json
-```
-
-Folders sort before files, then alphabetically, and folder names print with a trailing `/`.
-Long format is `<size>  <YYYY-MM-DD>  <name>`. Pointing `ls` at a file lists just that file.
 
 ### `nuage search`
 
@@ -462,12 +454,11 @@ Revokes an API key by ID. Prints `revoked key 42`.
 
 ## Machine-readable output
 
-`--json` is accepted anywhere and honored by `ls`, `search`, `share`, `shares`, `unshare`, the
+`--json` is accepted anywhere and honored by `search`, `share`, `shares`, `unshare`, the
 `spaces` subcommands, `token` and `keys`. It prints compact JSON on stdout and never prompts,
 so `spaces rm` skips its confirmation.
 
 ```sh
-nuage --json ls /Documents | jq -r '.[] | select(.type == "file") | .name'
 nuage --json search invoice -t file | jq '.[0].path'
 ```
 

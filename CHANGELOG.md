@@ -11,6 +11,43 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-24
+
+### Fixed
+
+- **A folder re-parented or renamed on the server left a ghost behind.** The
+  local directory stayed at its old path, every file the server put in that
+  folder resolved back to the old path where it hash-matched and was skipped,
+  and the folder the web UI showed stayed empty on disk. The sync now moves the
+  local directory, with its tracked subtree, to wherever the server says the
+  folder belongs. A destination holding files this sync did not put there is
+  refused and retried later rather than overwritten.
+- **A remote file or folder could be tracked twice.** `files` and `folders` are
+  keyed by `local_path`, so recording an object at a new path added a second row
+  beside the first, and lookups by `facile_id` returned whichever row SQLite
+  reached first. Recording an object now moves its identity, and the lookup is
+  ordered. A duplicate row a legacy database already holds resolves to the older
+  row, which is the one the content is behind, and collapses on the next pass.
+- **A pass advanced the sync cursor past what it had not applied.** An item that
+  failed or was quarantined was skipped, and the change feed only answers from
+  the cursor onwards, so it never came back. The cursor is now held while
+  anything is unresolved.
+
+### Added
+
+- **`nuage sync --verify`**, and the same verification once at daemon startup.
+  It re-reads the whole space instead of the changes since the cursor and
+  materialises anything missing locally, which recovers the drift an incremental
+  pass cannot see.
+
+### Removed
+
+- **`nuage ls` is gone.** The daemon keeps every mapped directory in sync, so the
+  local `ls` answers the same question without a request. `ls /` was also wrong at
+  the root: it read `GET /sync/state`, which ignores `space_id`, so it printed every
+  space's root folders merged and duplicated any name two spaces both hold.
+  `nuage search` remains for finding a file by name, and `--json` with it.
+
 ## [0.8.1] - 2026-09-24
 
 ### Fixed

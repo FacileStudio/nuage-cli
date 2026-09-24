@@ -25,12 +25,12 @@ nuage restart                  Restart daemon
 nuage status                   Show sync/daemon status, one block per space
 nuage logs [-f]                Show/follow daemon logs
 nuage sync                     One-shot sync of every mapped space
+nuage sync --verify            Re-read the whole space first, to recover lost drift
 nuage watch                    Foreground watcher
 ```
 
 ### Reads
 ```
-nuage ls [path] [-l]           List remote files
 nuage search <query>           Search files
   -t file|folder              Filter by type
   -f <folder>                 Scope to folder
@@ -80,9 +80,15 @@ nuage upgrade                  Self-upgrade
   delete one, delete it there
 - `nuage` with no arguments prints help and exits 0. It does not sync; use `nuage sync` or
   `nuage watch`
+- A pass advances the sync cursor only when it applied everything it read. While an item is
+  failed or quarantined the cursor holds, so the same item is retried next pass instead of
+  dropping out of the change window
+- `nuage sync --verify` re-reads the whole space and materialises anything missing locally. Use
+  it when the server shows something the synced directory does not have; the daemon also runs it
+  once at startup
 - `NUAGE_TOKEN`, `NUAGE_SERVER_URL` and `NUAGE_SPACE` override `~/.nuage.yml`; prefer them over
   editing the file
-- The read commands (`ls`, `search`, `share`, `shares`) answer from the personal space unless
+- The read commands (`search`, `share`, `shares`) answer from the personal space unless
   `NUAGE_SPACE` names another for that run. `NUAGE_SPACE` takes a space name or an id
 - `~/.nuage.yml` maps each space to a directory under `spaces:`, and the daemon syncs every
   mapping in parallel, each into its own directory. A config with no `spaces:` block is refused

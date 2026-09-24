@@ -61,7 +61,6 @@ Config lives at `~/.nuage.yml` -- see `config.example.yaml` for the format.
 `logs` -- show daemon logs (`-f` to follow)  
 `login` -- interactive setup  
 `upgrade` -- self-upgrade from GitHub  
-`ls`, `upload`, `download`, `mkdir`, `mv`, `rm` -- remote file operations  
 `share`, `unshare`, `shares` -- share link management  
 `search` -- search files/folders  
 `token create|list|revoke` -- API token management  
@@ -84,6 +83,8 @@ All subcommands support `--json` for machine-readable output.
 
 - The config file path is hardcoded to `~/.nuage.yml` (not XDG-compliant).
 - SQLite state DB location is managed in `sync/state.rs` (stored inside the sync directory as `.nuage/state.db`).
+- The state tables are keyed by `local_path` but the server identifies an object by `facile_id`. One `facile_id` must own exactly one row: `upsert_folder`/`upsert_file` drop the other rows for the id, and lookups by id read the oldest row. A folder the server re-parents has its local directory renamed to match, in `sync/relocate.rs`. Assuming a re-parent inserts a second row is the bug that made folders visible in the web UI and absent locally.
+- A sync pass advances the cursor only when it applied everything it read, and the daemon verifies the whole space against the local directory at startup. `nuage sync --verify` runs the same verification on demand.
 - The API client sends an `Origin` header to avoid CSRF 403 errors on multipart uploads.
 - Upload supports stdin piping (`-` as source path).
 - The daemon writes a PID file for process management; check `daemon.rs` for the PID file path.
