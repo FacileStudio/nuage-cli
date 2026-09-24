@@ -11,6 +11,15 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`nuage upgrade` replaced a binary nothing ran.** `cargo install` defaults to
+  `~/.cargo/bin`, but `install.sh` writes `~/.local/bin` and the daemon records
+  the path it was started from, so an upgrade reported success while the
+  restarted daemon kept serving the old build. The install root now follows the
+  daemon's own binary, read from `~/.nuage/nuage.meta`, and the daemon is
+  restarted from the binary just installed.
+
 ## [0.9.0] - 2026-09-24
 
 ### Fixed
