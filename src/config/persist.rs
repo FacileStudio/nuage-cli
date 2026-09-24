@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 
 use super::model::Config;
@@ -9,9 +9,36 @@ impl Config {
         Ok(home.join(".nuage.yml"))
     }
 
-    pub fn sync_dir_expanded(&self) -> Result<PathBuf> {
-        let expanded = shellexpand::tilde(&self.sync_dir);
-        Ok(PathBuf::from(expanded.as_ref()))
+    /// Resolves each space to an existing, canonical directory.
+    ///
+    /// The daemon runs one engine per entry, so two entries pointing at one
+    /// directory, or at directories nested inside each other, would sync the
+    /// same files twice and share one state database. Both are refused here
+    /// rather than allowed to corrupt each other later.
+    pub fn spaces_expanded(&self) -> Result<Vec<(String, PathBuf)>> {
+        let mut expanded: Vec<(String, PathBuf)> = Vec::with_capacity(self.spaces.len());
+        for (name, path) in &self.spaces {
+            let target = PathBuf::from(shellexpand::tilde(path).as_ref());
+            std::fs::create_dir_all(&target)
+                .with_context(|| format!("cannot create {}", target.display()))?;
+            let canonical = target
+                .canonicalize()
+                .with_context(|| format!("cannot resolve {}", target.display()))?;
+            expanded.push((name.clone(), canonical));
+        }
+        for (index, (name, dir)) in expanded.iter().enumerate() {
+            for (other_name, other_dir) in expanded.iter().skip(index + 1) {
+                if dir.starts_with(other_dir) || other_dir.starts_with(dir) {
+                    bail!(
+                        "spaces `{name}` and `{other_name}` map to overlapping directories \
+                         ({} and {}) — give each space its own directory in ~/.nuage.yml",
+                        dir.display(),
+                        other_dir.display()
+                    );
+                }
+            }
+        }
+        Ok(expanded)
     }
 
     pub fn save(&self) -> Result<()> {

@@ -11,6 +11,58 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-24
+
+### Added
+
+- A `spaces:` block in `~/.nuage.yml` maps each space to a local directory, and the
+  daemon syncs every mapping in parallel, each into its own directory with its own
+  state database.
+- `nuage spaces create <name> [--description <text>]`, `nuage spaces rename
+  <name-or-id> <new-name>` and `nuage spaces rm <name-or-id> [--yes]` manage spaces
+  from the CLI. `rm` asks before deleting, `--yes` skips the prompt, `--json` never
+  prompts, and `rm` refuses `personal`.
+
+### Changed
+
+- **`nuage` with no arguments prints the help message on stdout and exits `0`.** It
+  used to start a foreground sync, behaving as `nuage watch`.
+- **`NUAGE_SPACE` takes a space name or an id**, and is the only per-run space
+  override; it scopes the read commands (`ls`, `search`, `share`, `shares`). A name
+  costs one request to resolve.
+- `nuage status` prints one block per sync target, each naming its space and its
+  directory.
+- `nuage watch`, `nuage sync` and the daemon cover every space named in `spaces:`. The
+  daemon runs one task per mapping and stops them together on `SIGTERM`.
+- `nuage spaces list` marks the spaces that have a sync directory and prints it.
+  `--json` drops `selected` and adds `sync_dir` to each space.
+- `nuage sync` exits `1` when any target fails, even if the others succeeded.
+- Two names mapping to one directory, or a directory nested inside another, is refused
+  at load rather than allowed to double-sync.
+
+### Fixed
+
+- **`nuage sync`'s four flags are now documented.** `--dry-run`, `--allow-bulk-delete`,
+  `--retry-failed` and `--repair-state` all worked and appeared in `--help`, but
+  `docs/usage.md` mentioned none of them.
+
+### Removed
+
+- `sync_dir` in `~/.nuage.yml`, replaced by the `spaces:` map. The key is no longer read, and a
+  config that maps no space is refused with `no spaces mapped`. There is no automatic migration.
+- `nuage spaces use` and the global `--space` flag. `NUAGE_SPACE` replaces both.
+- `nuage upload`, `nuage download`, `nuage mkdir`, `nuage mv` and `nuage rm`. The
+  daemon is now the only writer.
+
+**BREAKING CHANGE:** three things need attention when upgrading from 0.7.x.
+`~/.nuage.yml` replaces `sync_dir` with a `spaces:` map (space name to directory); the old key
+is not read, and a config that maps no space is refused with `no spaces mapped`. There is no
+automatic migration, because folding an old `sync_dir` onto `personal` would move shared-space
+files into the personal space. `nuage spaces use` and the global `--space` flag are removed; set
+`NUAGE_SPACE` to a space name or an id for a single run instead. The `upload`,
+`download`, `mkdir`, `mv` and `rm` file commands are removed; write through the daemon
+by putting files in a space's mapped directory.
+
 ## [0.7.1] - 2026-09-24
 
 ### Changed
@@ -184,7 +236,8 @@ tag is v0.2.0; everything before it is folded into that entry.
   them.
 - The daemon guards against PID 0 and stops creating a directory twice.
 
-[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/FacileStudio/nuage-cli/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.5.0...v0.6.0

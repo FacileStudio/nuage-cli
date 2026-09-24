@@ -1,19 +1,19 @@
 pub mod daemon_cmds;
 pub mod daemon_run;
-pub mod download;
-pub mod files;
 pub mod keys;
 pub mod ls;
 pub mod paths;
 pub mod progress;
+pub mod repair;
 pub mod search;
 pub mod shares;
 pub mod space;
 pub mod spaces;
 pub mod status;
+pub mod supervisor;
 pub mod sync_cmds;
+pub mod targets;
 pub mod tokens;
-pub mod upload;
 
 use clap::Args;
 

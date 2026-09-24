@@ -37,6 +37,26 @@ pub struct ApiSpace {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateSpaceRequest {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateSpaceRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteSpaceResponse {
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncStateResponse {
     pub files: Vec<ApiFile>,
     pub folders: Vec<ApiFolder>,
@@ -66,11 +86,18 @@ pub struct FolderChanges {
 pub struct DeletedItem {
     pub id: i64,
     pub name: String,
+    #[serde(default)]
+    pub space_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FoldersListResponse {
     pub folders: Vec<ApiFolder>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileListResponse {
+    pub files: Vec<ApiFile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

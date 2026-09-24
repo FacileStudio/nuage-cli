@@ -55,12 +55,11 @@ async fn collect_entries(api: &ApiClient, path: &str) -> Result<Vec<LsEntry>> {
 
     match resolve_path(api, path).await? {
         ResolvedPath::Root => {
-            let state = api.sync_state().await?;
-            for f in state.folders.iter().filter(|f| f.parent_id.is_none()) {
-                entries.push(folder_entry(f));
+            for f in api.list_folders().await? {
+                entries.push(folder_entry(&f));
             }
-            for f in state.files.iter().filter(|f| f.folder_id.is_none()) {
-                entries.push(file_entry(f));
+            for f in api.list_root_files().await? {
+                entries.push(file_entry(&f));
             }
         }
         ResolvedPath::Folder(folder) => {

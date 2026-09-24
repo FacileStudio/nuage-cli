@@ -12,6 +12,7 @@ mod reconcile;
 mod remote_apply;
 mod remote_delete;
 mod remote_folders;
+mod report;
 mod scan;
 mod selective;
 
@@ -19,46 +20,29 @@ mod selective;
 mod tests;
 
 use anyhow::Result;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::api::ApiClient;
 use crate::config::Config;
 use crate::ignore::IgnoreRules;
 use state::SyncState;
 
+pub use report::{SyncOptions, SyncReport};
+
 const DOWNLOAD_CONCURRENCY: usize = 4;
 const MAX_FOLDER_DEPTH: usize = 64;
 const DELETE_GUARD_FLOOR: usize = 10;
 const DELETE_GUARD_PERCENT: usize = 10;
 
-/// Behavioral switches for a sync pass.
-#[derive(Clone, Copy, Default)]
-pub struct SyncOptions {
-    /// Report what would change without touching the filesystem or the server.
-    pub dry_run: bool,
-    /// Permit propagating a batch of local deletions that exceeds the safety guard.
-    pub allow_bulk_delete: bool,
-}
-
-#[derive(Default)]
-pub struct SyncReport {
-    pub downloaded: usize,
-    pub uploaded: usize,
-    pub updated: usize,
-    pub deleted_local: usize,
-    pub deleted_remote: usize,
-    pub conflicts: usize,
-    pub folders_created: usize,
-    pub skipped: usize,
-    pub errors: usize,
-    pub blocked_deletes: usize,
-    pub planned: Vec<String>,
-}
-
-impl SyncReport {
-    pub fn total_changes(&self) -> usize {
-        self.downloaded + self.uploaded + self.updated + self.deleted_local + self.deleted_remote
-    }
+/// One space and the directory it is kept in step with.
+///
+/// The daemon runs one engine per target, so every target carries its own
+/// directory and its own state database. They cannot share either: two targets
+/// on one directory would fight over the same tracking rows.
+pub struct SyncTarget {
+    pub name: String,
+    pub space: Option<i64>,
+    pub dir: PathBuf,
 }
 
 pub struct SyncEngine {
@@ -66,7 +50,7 @@ pub struct SyncEngine {
     api: ApiClient,
     state: SyncState,
     ignore: IgnoreRules,
-    sync_dir: PathBuf,
+    target: SyncTarget,
     options: SyncOptions,
 }
 
@@ -76,16 +60,16 @@ impl SyncEngine {
         api: ApiClient,
         state: SyncState,
         ignore: IgnoreRules,
-    ) -> Result<Self> {
-        let sync_dir = config.sync_dir_expanded()?;
-        Ok(Self {
+        target: SyncTarget,
+    ) -> Self {
+        Self {
             config,
             api,
             state,
             ignore,
-            sync_dir,
+            target,
             options: SyncOptions::default(),
-        })
+        }
     }
 
     pub fn with_options(mut self, options: SyncOptions) -> Self {
@@ -97,8 +81,8 @@ impl SyncEngine {
         &self.state
     }
 
-    pub fn sync_dir(&self) -> &Path {
-        &self.sync_dir
+    pub fn target(&self) -> &SyncTarget {
+        &self.target
     }
 
     pub fn ignore_rules(&self) -> &IgnoreRules {
@@ -112,7 +96,8 @@ impl SyncEngine {
     pub async fn full_sync(&self) -> Result<SyncReport> {
         let mut report = SyncReport::default();
 
-        let changes = remote::fetch_remote_changes(&self.api, &self.state).await?;
+        let changes =
+            remote::fetch_remote_changes(&self.api, &self.state, self.target.space).await?;
 
         let (folders_to_sync, files_to_sync) =
             self.apply_selective_sync(changes.changed_folders, changes.changed_files);

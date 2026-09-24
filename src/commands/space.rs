@@ -1,10 +1,8 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use std::sync::OnceLock;
 
 use crate::api::ApiClient;
-use crate::config;
-use crate::ignore;
-use crate::sync;
+use crate::config::{self, env_space};
 
 /// The name for the account's own tree.
 ///
@@ -18,79 +16,62 @@ pub fn is_personal(raw: &str) -> bool {
     raw.eq_ignore_ascii_case(PERSONAL)
 }
 
-/// What `--space` asked for. `Unset` and `Personal` are different answers:
-/// the first defers to the config, the second overrides it.
-#[derive(Clone, Copy)]
-pub enum SpaceFlag {
-    Unset,
+/// What a space reference names, before any lookup happens.
+///
+/// An id costs nothing to use and a name costs one request, so the two are kept
+/// apart until a request is actually available.
+pub enum SpaceRef {
     Personal,
-    Space(i64),
+    Id(i64),
+    Name(String),
 }
 
-/// The `--space` flag, resolved to an id once per run.
-///
-/// Resolving a name costs a request, and `load_api` is called from twenty
-/// synchronous places, so the lookup happens once in `run` and every later
-/// caller reads the answer.
-pub static SPACE_OVERRIDE: OnceLock<SpaceFlag> = OnceLock::new();
-
-/// The space every request is scoped to: the flag when given, the config
-/// otherwise, and the personal space when neither names one.
-pub fn selected_space(config: &config::Config) -> Option<i64> {
-    match SPACE_OVERRIDE.get() {
-        Some(SpaceFlag::Personal) => None,
-        Some(SpaceFlag::Space(id)) => Some(*id),
-        _ => config.space,
+pub fn parse_ref(raw: &str) -> SpaceRef {
+    if is_personal(raw) {
+        SpaceRef::Personal
+    } else if let Ok(id) = raw.parse::<i64>() {
+        SpaceRef::Id(id)
+    } else {
+        SpaceRef::Name(raw.to_string())
     }
+}
+
+/// The `NUAGE_SPACE` override, resolved to an id once per run.
+///
+/// Resolving a name costs a request, and `load_api` is called from the
+/// synchronous command bodies, so the lookup happens once in `run_async` and
+/// every later caller reads the answer.
+static OVERRIDE: OnceLock<Option<i64>> = OnceLock::new();
+
+pub fn set_override(space: Option<i64>) {
+    let _ = OVERRIDE.set(space);
+}
+
+/// The space this run's commands act on: `NUAGE_SPACE` when it names one, the
+/// personal space otherwise.
+pub fn override_space() -> Option<i64> {
+    OVERRIDE.get().copied().flatten()
 }
 
 pub fn load_api() -> Result<ApiClient> {
     let config = config::Config::load()?;
-    let space = selected_space(&config);
-    ApiClient::new(&config.server_url, &config.token, space)
+    ApiClient::new(&config.server_url, &config.token, override_space())
 }
 
-/// Builds the sync engine, deliberately unscoped.
-///
-/// `sync/state` without a space returns every space's tree, which is the merged
-/// view `~/Nuage` already holds. Narrowing it would strand the files of every
-/// other space in a directory the engine no longer tracks, so per-space sync
-/// needs its own sync directory and its own change.
-pub fn build_engine() -> Result<sync::SyncEngine> {
-    let config = config::Config::load()?;
-    let sync_dir = config.sync_dir_expanded()?;
-
-    std::fs::create_dir_all(&sync_dir)
-        .with_context(|| format!("cannot create sync directory: {}", sync_dir.display()))?;
-
-    let api_client = ApiClient::new(&config.server_url, &config.token, None)?;
-    let state = sync::state::SyncState::new(&sync_dir)?;
-    let ignore = ignore::IgnoreRules::new(config.ignore_patterns.clone());
-
-    sync::SyncEngine::new(config, api_client, state, ignore)
-}
-
-/// Turns a `--space` value into an id, hitting the server only for a name.
-///
-/// An id is the common case and costs nothing; a name costs one request, which
-/// is the price of not having to look the number up by hand.
-pub async fn resolve_space_flag(flag: Option<&str>) -> Result<SpaceFlag> {
-    let raw = match flag {
-        Some(v) => v.trim(),
-        None => return Ok(SpaceFlag::Unset),
+pub async fn resolve_env_space() -> Result<Option<i64>> {
+    let Some(raw) = env_space() else {
+        return Ok(None);
     };
 
-    if is_personal(raw) {
-        return Ok(SpaceFlag::Personal);
+    match parse_ref(&raw) {
+        SpaceRef::Personal => Ok(None),
+        SpaceRef::Id(id) => Ok(Some(id)),
+        SpaceRef::Name(name) => {
+            let config = config::Config::load()?;
+            let api = ApiClient::new(&config.server_url, &config.token, None)?;
+            Ok(Some(resolve_space_name(&api, &name).await?))
+        }
     }
-
-    if let Ok(id) = raw.parse::<i64>() {
-        return Ok(SpaceFlag::Space(id));
-    }
-
-    let config = config::Config::load()?;
-    let api = ApiClient::new(&config.server_url, &config.token, None)?;
-    Ok(SpaceFlag::Space(resolve_space_name(&api, raw).await?))
 }
 
 /// Matches a space by name, case-insensitively.
@@ -108,5 +89,18 @@ pub async fn resolve_space_name(api: &ApiClient, name: &str) -> Result<i64> {
             known.extend(spaces.iter().map(|s| s.name.as_str()));
             bail!("no space named `{name}` — known: {}", known.join(", "))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reference_is_read_before_any_lookup() {
+        assert!(is_personal("PERSONAL"));
+        assert!(matches!(parse_ref("personal"), SpaceRef::Personal));
+        assert!(matches!(parse_ref("7"), SpaceRef::Id(7)));
+        assert!(matches!(parse_ref("FacileShared"), SpaceRef::Name(_)));
     }
 }

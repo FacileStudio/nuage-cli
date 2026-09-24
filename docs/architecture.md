@@ -6,22 +6,22 @@ local state database, and every endpoint it consumes.
 ## Topology
 
 ```
-                          ~/.nuage.yml  (server_url, token, sync_dir, poll_interval)
-                                  │
-       ┌──────────────────────────┴───────────────────────────┐
+                       ~/.nuage.yml  (server_url, token, spaces, poll_interval)
+                               │
+       ┌───────────────────────┴──────────────────────────────┐
        ▼                                                      ▼
-  nuage daemon (forked)                              nuage <one-shot command>
-   ├─ FsWatcher  ──▶ local changes (2s debounce)      ls / upload / download / mv / rm
-   ├─ poll timer ──▶ remote changes (poll_interval)   share / shares / search / token
-   └─ SyncEngine                                              │
-       │                                                      │
-       ├── <sync_dir>/.nuage/state.db   SQLite, WAL           │
-       └───────────────┬──────────────────────────────────────┘
-                       │  reqwest, Authorization: Bearer <token>
-                       ▼
-              Nuage Go API  (server_url)
-                       │
-              PostgreSQL + object storage
+  nuage daemon (forked)                            nuage <one-shot command>
+   one thread per mapped space                       ls / search / share
+    ├─ FsWatcher ─▶ local changes (2s debounce)     spaces list|create|rename|rm
+    ├─ poll timer ─▶ remote changes (poll_interval) token / keys
+    └─ SyncEngine, scoped to its space                       │
+        └── <dir>/.nuage/state.db  SQLite, WAL               │
+       └─────────────────────┬────────────────────────────────┘
+                             │  reqwest, Authorization: Bearer <token>
+                             ▼
+                    Nuage Go API  (server_url)
+                             │
+                    PostgreSQL + object storage
 
   ~/.nuage/nuage.pid        PID file
   ~/.nuage/logs/nuage.log   daemon log
@@ -29,40 +29,52 @@ local state database, and every endpoint it consumes.
 
 ## Process modes
 
-`main()` splits before the async runtime is created:
+`main()` splits before the async runtime is created. `start`, `stop`, `restart` and `logs` run
+synchronously: `start` daemonizes the process with `daemonize`, redirecting stdout and stderr
+into `~/.nuage/logs/nuage.log` and writing `~/.nuage/nuage.pid`, then builds a runtime inside
+the forked child. Everything else initializes terminal logging, builds a `tokio` runtime, and
+blocks on the matching handler.
 
-- `start`, `stop`, `restart`, `logs` run synchronously. `start` daemonizes the process with
-  `daemonize`, redirecting stdout and stderr into `~/.nuage/logs/nuage.log` and writing
-  `~/.nuage/nuage.pid`, then builds a runtime inside the forked child.
-- Everything else — including the default, no-argument invocation — initializes terminal
-  logging, builds a `tokio` runtime, and blocks on the matching handler.
+With no subcommand, `nuage` prints the help message on stdout and exits `0`. It does not start a
+sync; run `nuage watch` or `nuage start` for that. An unknown subcommand is a clap usage error
+and exits `2`.
 
-With no subcommand, `nuage` behaves exactly like `nuage watch`: a foreground sync loop.
+`stop` sends `SIGTERM`, polls `kill(pid, 0)` every 100 ms for up to five seconds, then escalates
+to `SIGKILL` and removes the PID file. `is_running()` self-heals a stale PID file: unreadable,
+unparseable or dead PIDs are deleted and reported as stopped.
 
-`stop` reads the PID file, sends `SIGTERM`, polls `kill(pid, 0)` every 100 ms for up to five
-seconds, then escalates to `SIGKILL` and removes the PID file. `is_running()` self-heals a
-stale PID file: unreadable, unparseable or dead PIDs are deleted and reported as stopped.
+## Sync targets
+
+`spaces:` in `~/.nuage.yml` maps a space name to a local directory, one pair per line. The
+daemon is scoped per target, not globally: `resolve_targets` turns each pair into a
+`SyncTarget { name, space, dir }`, and each target gets its own `SyncEngine`, its own
+`ApiClient` scoped to that space, its own `SyncState`, and the shared `IgnoreRules`. Files never
+cross between directories.
+
+`spaces_expanded()` is the only guard against two engines fighting over one directory. It
+expands `~`, creates each directory, canonicalizes it, and refuses two names mapping to the same
+directory or any directory nested inside another. The daemon refuses to start on such a config.
+
+The daemon runs one thread per target, each with its own current-thread runtime, under a single
+`tokio::sync::watch` shutdown channel, so `SIGTERM` stops all of them together. Threads rather
+than `tokio::spawn` because the engine holds a SQLite connection, which is `Send` but not `Sync`.
+A space name that no longer resolves warns and drops that target rather than killing the daemon.
+
+The server ignores `space_id` on the sync endpoints: `GET /sync/state` and `GET /sync/changes`
+always answer the caller's personal rows merged with every space they belong to. Per-space
+routing is therefore a client-side filter, and `sync/remote.rs` is the one place it happens. It
+narrows all four change vectors on `ApiFile.space_id` and `ApiFolder.space_id`, with `None`
+meaning personal.
 
 ## The sync loop
 
-`sync_loop` runs both directions off one loop:
-
-```
-loop {
-  watcher.try_recv()          non-blocking: any debounced local paths?
-    └─▶ process_local_changes
-
-  select! {
-    SIGTERM | SIGINT   -> break
-    poll_timer.tick()  -> process_remote_changes   every poll_interval seconds
-    sleep(100ms)       -> keep the loop responsive
-  }
-}
-```
-
-Local changes are therefore picked up on the next 100 ms turn of the loop, while remote
-changes wait for the poll timer. `FsWatcher` wraps `notify-debouncer-mini` with a 2-second
-debounce and filters ignored paths inside the callback, before anything reaches the channel.
+`supervisor::target_loop` runs both directions off one loop per target. Each turn drains the debounced
+filesystem watcher with `try_recv`, then waits on a `select!`: the shutdown channel breaks,
+the poll timer fires `process_remote_changes` every `poll_interval` seconds, and a 100 ms sleep
+keeps the loop responsive. Local changes are therefore picked up on the next 100 ms turn, while
+remote changes wait for the poll timer. `FsWatcher` wraps `notify-debouncer-mini` with a
+2-second debounce and filters ignored paths inside the callback, before anything reaches the
+channel.
 
 ## Full sync
 
@@ -70,8 +82,9 @@ debounce and filters ignored paths inside the callback, before anything reaches 
 
 1. **Fetch remote changes.** With no cursor, `GET /sync/state` returns the whole tree. With a
    cursor, `GET /sync/changes?since=<cursor>` returns changed and deleted files and folders.
-2. **Apply selective sync,** if `selective_sync` is non-empty: folder paths are reconstructed
-   from the change set and anything outside the selected prefixes is dropped.
+2. **Filter to this target's space,** then apply selective sync if `selective_sync` is
+   non-empty: folder paths are reconstructed from the change set and anything outside the
+   selected prefixes is dropped.
 3. **Create folders** locally, topologically sorted so parents exist before children.
 4. **Delete locally** anything the server reports as deleted.
 5. **Download changed files,** four at a time behind a `tokio::sync::Semaphore`, writing to a
@@ -80,7 +93,8 @@ debounce and filters ignored paths inside the callback, before anything reaches 
 7. **Store the server's `server_time`** as the new cursor.
 
 The report counts downloads, uploads, local and remote deletions, conflicts and folders
-created.
+created. `nuage sync` runs every target and prefixes each report line with its name; if any
+target failed, the command exits `1`.
 
 ## Conflict resolution
 
@@ -89,10 +103,10 @@ Before overwriting an existing local file, the engine hashes it and calls
 
 | Situation | Resolution |
 |---|---|
-| Local and remote hashes match | `UseRemote` — nothing changes |
-| Local matches the last known hash, remote does not | `UseRemote` — the server moved on |
-| Remote matches the last known hash, local does not | `UseLocal` — skip the download |
-| Neither matches, or nothing is known | `KeepBoth` — rename local, then download |
+| Local and remote hashes match | `UseRemote`: nothing changes |
+| Local matches the last known hash, remote does not | `UseRemote`: the server moved on |
+| Remote matches the last known hash, local does not | `UseLocal`: skip the download |
+| Neither matches, or nothing is known | `KeepBoth`: rename local, then download |
 
 `KeepBoth` renames the local file to `<stem>.conflict.<ext>` (or `<stem>.conflict` when there
 is no extension) beside the original, and the remote copy lands under the original name.
@@ -100,17 +114,18 @@ Nothing is ever silently discarded.
 
 ## Local state
 
-`<sync_dir>/.nuage/state.db` is a SQLite database opened with `journal_mode=WAL` and
-`synchronous=NORMAL`, migrated on every open with `CREATE TABLE IF NOT EXISTS`:
+`<dir>/.nuage/state.db` is a SQLite database, one per sync target, opened with
+`journal_mode=WAL` and `synchronous=NORMAL`, migrated on every open with
+`CREATE TABLE IF NOT EXISTS`:
 
 | Table | Columns |
 |---|---|
 | `files` | `id`, `facile_id`, `name`, `local_path` (unique), `hash`, `size`, `folder_id`, `remote_updated_at`, `local_modified_at`, `synced_at` |
 | `folders` | `id`, `facile_id`, `name`, `local_path` (unique), `parent_id`, `remote_updated_at`, `synced_at` |
-| `sync_cursor` | `key`, `value` — one row, `last_sync` |
+| `sync_cursor` | `key`, `value`, one row, `last_sync` |
 
 `local_path` is relative to the sync directory, so the whole database travels with the folder.
-Deleting `.nuage/` resets the client to a first-run full sync. `.nuage/` is force-added to the
+Deleting `.nuage/` resets that target to a first-run full sync. `.nuage/` is force-added to the
 ignore rules in `IgnoreRules::new`, so the state DB can never sync itself into the cloud.
 
 Change detection is SHA-256 over a 64 KB buffered reader (`src/hash.rs`), compared against the
@@ -118,14 +133,11 @@ Change detection is SHA-256 over a 64 KB buffered reader (`src/hash.rs`), compar
 
 ## HTTP client
 
-`ApiClient` builds two reqwest clients:
-
-- the default client, 30-second timeout, for metadata calls
-- a `transfer_client`, 300-second timeout, for uploads and downloads
-
-Both set an `Origin` header derived from `server_url` (scheme, host and port), which is what
-keeps the server's CSRF check from rejecting multipart uploads. Paths are appended verbatim
-to `server_url`, whose trailing slash is trimmed.
+`ApiClient` builds two reqwest clients: a default one with a 30-second timeout for metadata
+calls, and a `transfer_client` with a 300-second timeout for uploads and downloads. Both set an
+`Origin` header derived from `server_url` (scheme, host and port), which is what keeps the
+server's CSRF check from rejecting multipart uploads. An `ApiClient` built for a sync target
+carries that target's space and appends `?space_id=` where a route accepts it.
 
 ## Endpoints used
 
@@ -133,6 +145,10 @@ to `server_url`, whose trailing slash is trimmed.
 |---|---|---|
 | `GET` | `/sync/state` | Full tree, and the connection test in `nuage login` |
 | `GET` | `/sync/changes?since={cursor}` | Incremental changes and deletions |
+| `GET` | `/spaces` | Every space the account belongs to |
+| `POST` | `/spaces` | Create a space |
+| `PUT` | `/spaces/{id}` | Rename a space |
+| `DELETE` | `/spaces/{id}` | Delete a space |
 | `GET` | `/folders` | Root folders |
 | `GET` | `/folders/{id}` | Folder detail with its files and subfolders |
 | `POST` | `/folders` | Create a folder |
@@ -158,26 +174,24 @@ uses a plain `reqwest::Client` for them rather than `ApiClient`, which exists to
 credentials it does not yet have.
 
 porte also ships the listener half of that flow, as `porte/loopback`, and every Go CLI in the
-suite now links it. This one cannot, so `login.rs` keeps its own listener and `handoff.rs`
-keeps a byte-for-byte copy of the page porte renders. The copy is the point: `diff` against
-`porte/internal/handoff` or `Mycelium/internal/server/handoff.html.tmpl` is what proves the
-pages have not drifted, which a page rewritten in Rust could never have offered.
+suite now links it. This one cannot, so `login/loopback.rs` keeps its own listener and
+`handoff.rs` keeps a byte-for-byte copy of the page porte renders. The copy is the point: `diff`
+against `porte/internal/handoff` proves the pages have not drifted, which a page rewritten in
+Rust could never have offered.
 
 None of these carry an `/api` prefix, but the deployed Nuage sits behind a Traefik router that
-strips one — so `server_url` normally ends in `/api`. See
+strips one, so `server_url` normally ends in `/api`. See
 [configuration.md](configuration.md).
 
 ## Path resolution
 
-The remote file commands take human paths like `/Documents/report.pdf`. `resolve_path` walks
-them one segment at a time: root folders come from `GET /folders`, then each subsequent
-segment is looked up in that folder's detail response. The result is `Root`, `Folder` or
-`File`, and commands reject the combinations that make no sense — you cannot `download` a
-folder, `mkdir` inside a file, or `rm` the root.
-
-That means a deep path costs one request per level. It is correct, not fast.
+`ls`, `share` and `search --folder` take human paths like `/Documents/report.pdf`. `resolve_path`
+walks them one segment at a time: root folders come from `GET /folders`, then each subsequent
+segment is looked up in that folder's detail response. The result is `Root`, `Folder` or `File`,
+and each command rejects the combinations that make no sense. That means a deep path costs one
+request per level. It is correct, not fast.
 
 ## Suite integration
 
 The CLI is a plain REST consumer. It does not use `pool`, `enveloppe` or Journal, and it does
-not speak OIDC — authentication is a Nuage API token only.
+not speak OIDC. Authentication is a Nuage API token only.

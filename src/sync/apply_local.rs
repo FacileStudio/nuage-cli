@@ -99,7 +99,7 @@ impl SyncEngine {
             return Ok(None);
         }
 
-        if self.sync_dir.join(&old_record.local_path).exists() {
+        if self.target.dir.join(&old_record.local_path).exists() {
             return Ok(None);
         }
 

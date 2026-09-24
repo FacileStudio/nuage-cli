@@ -1,21 +1,22 @@
 # nuage-cli
 
 Sync daemon and terminal client for [Nuage](https://github.com/FacileStudio/Nuage), the
-self-hosted cloud storage app. The `nuage` binary keeps a local directory bidirectionally in
-sync with a Nuage server, and doubles as a remote file manager.
+self-hosted cloud storage app. The `nuage` binary keeps one local directory per space
+bidirectionally in sync with a Nuage server, and lists, searches and shares what is there.
 
 Run it as a background daemon for continuous sync, or use its one-shot subcommands to list,
-upload, download, move, share and search remote files.
+search and share remote files. The daemon is the only writer: to put a file in a space, drop
+it in that space's mapped directory and it syncs.
 
 ## What it does
 
-- Bidirectional sync between a local directory and the server, with SHA-256 change detection
+- Bidirectional sync between each mapped directory and its space, with SHA-256 change detection
+- One directory and one state database per space, synced in parallel
 - Background daemon with PID file, log file, and `start` / `stop` / `restart` / `logs`
 - Filesystem watching with a 2-second debounce, plus a configurable server poll
 - Conflict resolution using the last known hash, keeping both copies when it cannot decide
 - Glob ignore patterns and optional selective sync of specific paths
-- Remote file management: `ls`, `upload`, `download`, `mkdir`, `mv`, `rm`, `search`
-- Share links with view or edit permission and an optional expiry
+- Remote reads with `ls` and `search`, and share links with view or edit permission and an expiry
 - API token and API key management, and `--json` on every non-daemon command
 
 ## Stack
@@ -49,13 +50,13 @@ facile install nuage
 ```sh
 nuage login                        # sign in through the browser, writes ~/.nuage.yml
 nuage logout                       # clear the stored token, keep everything else
-nuage start                        # background sync daemon
-nuage status                       # daemon state, last sync, file counts
-nuage sync                         # one-shot bidirectional sync
-nuage spaces list                  # every space you can act in, personal included
-nuage spaces use personal          # act on your own files again
+nuage start                        # background sync daemon, one task per mapped space
+nuage status                       # daemon state, last sync, file counts, per space
+nuage sync                         # one-shot sync of every mapped space
+nuage spaces list                  # every space you can act in, with its sync directory
+nuage spaces create FacileShared   # create a space
 nuage ls /Documents -l
-nuage upload report.pdf /Documents
+NUAGE_SPACE=FacileShared nuage ls / # read a shared space for one command
 nuage share /Documents/report.pdf -e 7d
 nuage keys list                    # list registered API keys
 nuage keys create --app myapp      # create an API key
@@ -73,7 +74,7 @@ credential is ever typed into the terminal or left in a URL.
 The page the browser lands on at the end is the suite's, not this repo's: `src/handoff.html.tmpl`
 is a byte-for-byte copy of the template every Facile tool renders, so a `nuage` login and a
 `courrier` one end on the same page. A callback the listener refuses, one carrying no code or the
-wrong nonce, gets that page too, coloured as a warning and saying the login is still waiting.
+wrong nonce, gets that page too, colored as a warning and saying the login is still waiting.
 
 ```sh
 nuage login --server https://nuage.facile.studio   # the /api suffix is added for you
@@ -85,8 +86,9 @@ Use `--token` on a machine with no browser: mint a token in the dashboard under 
 API and paste it at the prompt. Login also falls back to it on its own if a browser cannot be
 opened and the instance permits it.
 
-Both commands rewrite only `server_url` and `token`. Your `sync_dir`, `poll_interval`,
-`ignore_patterns` and `selective_sync` are read, kept and written back untouched.
+Both commands rewrite only `server_url` and `token`, plus `spaces` on a first run. Your
+`poll_interval`, `ignore_patterns` and `selective_sync` are read, kept and written back
+untouched.
 
 ## Configuration
 
@@ -96,7 +98,9 @@ All configuration lives in `~/.nuage.yml`, written by `nuage login` or by hand. 
 ```yaml
 server_url: https://nuage.facile.studio/api
 token: your-api-token
-sync_dir: ~/Nuage
+spaces:
+  personal: ~/Brain
+  FacileShared: ~/Nuage
 poll_interval: 30
 ignore_patterns:
   - ".DS_Store"
@@ -108,19 +112,23 @@ ignore_patterns:
 |---|---|
 | `server_url` | Base URL prefixed to every request. Must reach the API, `/api` included |
 | `token` | Nuage API token, sent as `Authorization: Bearer <token>` |
-| `sync_dir` | Local directory to keep in sync. `~` is expanded. Defaults to `~/Nuage` |
+| `spaces` | Space name to local directory. The daemon syncs every pair, each into its own directory with its own state database. `~` is expanded |
 | `poll_interval` | Seconds between server polls in the daemon. Defaults to `30` |
 | `ignore_patterns` | Globs excluded from sync. `.nuage/` is always added |
-| `space` | Space the commands act on. Absent means your personal space. Written by `nuage spaces use`, and removed by `nuage spaces use personal` |
 
-Two environment variables override the file, for CI and for one-off runs against another
+A config with no `spaces:` block is refused when `sync` or the daemon runs, with
+`no spaces mapped`. The pre-0.8.0 `sync_dir` key is no longer read: move its value under
+`spaces:` yourself, because one directory cannot be folded onto a space without moving the
+wrong files into it.
+
+Three environment variables override the file, for CI and for one-off runs against another
 instance. Precedence is flag, then environment, then file, then built-in default.
 
 | Variable | Overrides |
 |---|---|
 | `NUAGE_TOKEN` | `token` |
 | `NUAGE_SERVER_URL` | `server_url` |
-| `NUAGE_SPACE` | `space`, as an id. A name, `personal` included, is refused rather than ignored |
+| `NUAGE_SPACE` | The space the read commands act on, for one run. Takes a space name or an id |
 
 Full reference, including `selective_sync` and the on-disk layout:
 [docs/configuration.md](docs/configuration.md).
@@ -129,14 +137,15 @@ Full reference, including `selective_sync` and the on-disk layout:
 
 ```
 src/
-  main.rs      clap tree and every subcommand handler
-  config.rs    ~/.nuage.yml loading, validation, env overrides, saving
-  login.rs     browser SSO loopback flow, API-token fallback, logout
-  api.rs       Nuage REST client and response models
-  daemon.rs    PID file, log paths, daemon and terminal logging setup
+  main.rs      clap tree and dispatch
+  commands/    one module per command group, plus the daemon supervisor
+  config/      ~/.nuage.yml model, validation, env overrides, saving
+  login/       browser SSO loopback flow, API-token fallback, logout
+  api/         Nuage REST client and response models
+  daemon/      PID file, log paths, daemon and terminal logging setup
   handoff.rs   the sign-in page the loopback listener serves, shared with the suite
   hash.rs      buffered SHA-256 file hashing
-  ignore.rs    glob ignore matching
+  ignore/      glob ignore matching
   sync/        the sync engine: state DB, watcher, conflict resolver, transfers
 integrations/  SKILL.md, registered with Claude Code and Codex by install.sh
 ```

@@ -1,11 +1,9 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::Args;
-use std::path::Path;
 
-use crate::commands::daemon_run::sync_loop;
-use crate::commands::space::build_engine;
-use crate::sync;
-use crate::sync::state::SyncState;
+use crate::commands::{repair, supervisor, targets};
+use crate::config::{self, Config};
+use crate::sync::{self, SyncTarget};
 use crate::ui;
 
 #[derive(Args)]
@@ -26,23 +24,19 @@ pub struct SyncArgs {
     pub repair_state: bool,
 }
 
-fn warn_blocked_deletes(report: &sync::SyncReport) {
-    if report.blocked_deletes > 0 {
-        ui::warn(&format!(
-            "{} deletion(s) held back by the safety guard — see `nuage sync --dry-run`",
-            report.blocked_deletes
-        ));
-    }
-}
-
-pub fn report_warnings(report: &sync::SyncReport) {
+fn report_warnings(report: &sync::SyncReport) {
     if report.conflicts > 0 {
         ui::warn(&format!(
             "{} conflict(s) — both versions kept, local copy renamed",
             report.conflicts
         ));
     }
-    warn_blocked_deletes(report);
+    if report.blocked_deletes > 0 {
+        ui::warn(&format!(
+            "{} deletion(s) held back by the safety guard — see `nuage sync --dry-run`",
+            report.blocked_deletes
+        ));
+    }
     if report.skipped > 0 {
         ui::warn(&format!(
             "{} quarantined file(s) skipped — retry with `nuage sync --retry-failed`",
@@ -54,26 +48,33 @@ pub fn report_warnings(report: &sync::SyncReport) {
     }
 }
 
-pub async fn cmd_watch() -> Result<()> {
-    let engine = build_engine()?;
-    engine.preflight()?;
+fn report_sync(name: &str, report: &sync::SyncReport, dry_run: bool, named: bool) {
+    let prefix = if named {
+        format!("{name}: ")
+    } else {
+        String::new()
+    };
 
-    ui::step("Starting initial sync");
-    let report = engine.full_sync().await?;
+    if !dry_run {
+        ui::success(&format!(
+            "{prefix}sync complete ({} changes)",
+            report.total_changes()
+        ));
+        return;
+    }
 
-    let file_count = engine.state().file_count().unwrap_or(0);
-    println!(
-        "[nuage] watching {} (synced {} files)",
-        engine.sync_dir().display(),
-        file_count
-    );
+    if report.planned.is_empty() {
+        ui::success(&format!("{prefix}already in sync — no changes planned"));
+        return;
+    }
 
-    report_warnings(&report);
-
-    sync_loop(&engine).await?;
-
-    println!("\n[nuage] stopped");
-    Ok(())
+    for line in &report.planned {
+        println!("  {prefix}{line}");
+    }
+    ui::success(&format!(
+        "{prefix}{} change(s) planned",
+        report.planned.len()
+    ));
 }
 
 fn clear_quarantine(engine: &sync::SyncEngine) -> Result<()> {
@@ -84,41 +85,63 @@ fn clear_quarantine(engine: &sync::SyncEngine) -> Result<()> {
     Ok(())
 }
 
-fn report_sync(report: &sync::SyncReport, dry_run: bool) {
-    if !dry_run {
-        ui::success(&format!(
-            "Sync complete ({} changes)",
-            report.total_changes()
-        ));
-        return;
-    }
-
-    if report.planned.is_empty() {
-        ui::success("Already in sync — no changes planned");
-        return;
-    }
-
-    for line in &report.planned {
-        println!("  {}", line);
-    }
-    ui::success(&format!("{} change(s) planned", report.planned.len()));
-}
-
-pub async fn cmd_sync(args: &SyncArgs) -> Result<()> {
+async fn sync_target(config: &Config, target: SyncTarget, args: &SyncArgs) -> Result<sync::SyncReport> {
     let options = sync::SyncOptions {
         dry_run: args.dry_run,
         allow_bulk_delete: args.allow_bulk_delete,
     };
-    let engine = build_engine()?.with_options(options);
+    let engine = targets::build_engine(config, target)?.with_options(options);
     engine.preflight()?;
 
     if args.retry_failed {
         clear_quarantine(&engine)?;
     }
-
     if args.repair_state {
-        repair_state(&engine, args.dry_run)?;
+        repair::repair_state(&engine, args.dry_run)?;
     }
+
+    engine.full_sync().await
+}
+
+async fn sync_all(
+    config: &Config,
+    targets: Vec<SyncTarget>,
+    unknown: Vec<String>,
+    args: &SyncArgs,
+) -> Result<()> {
+    let named = targets.len() > 1;
+    let count = targets.len() + unknown.len();
+    let mut failures = unknown;
+
+    for target in targets {
+        let name = target.name.clone();
+        match sync_target(config, target, args).await {
+            Ok(report) => {
+                report_sync(&name, &report, args.dry_run, named);
+                report_warnings(&report);
+            }
+            Err(e) => {
+                ui::warn(&format!("{name}: {e:#}"));
+                failures.push(name);
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        return Ok(());
+    }
+
+    bail!(
+        "{} of {count} spaces failed: {}",
+        failures.len(),
+        failures.join(", ")
+    )
+}
+
+pub async fn cmd_sync(args: &SyncArgs) -> Result<()> {
+    let config = config::Config::load()?;
+    let targets = targets::resolve_targets(&config).await?;
+    targets.warn_unknown();
 
     if args.dry_run {
         ui::step("Dry run — nothing will be modified");
@@ -126,68 +149,22 @@ pub async fn cmd_sync(args: &SyncArgs) -> Result<()> {
         ui::step("Syncing");
     }
 
-    let report = engine.full_sync().await?;
-
-    report_sync(&report, args.dry_run);
-    report_warnings(&report);
-    Ok(())
+    sync_all(&config, targets.known, targets.unknown, args).await
 }
 
-fn stale_records(state: &SyncState, sync_dir: &Path) -> Result<(Vec<String>, Vec<String>)> {
-    let stale_files = state
-        .all_files()?
+pub async fn cmd_watch() -> Result<()> {
+    let config = config::Config::load()?;
+    let targets = targets::resolve_targets(&config).await?;
+    targets.warn_unknown();
+
+    let engines = targets
+        .known
         .into_iter()
-        .map(|r| r.local_path)
-        .filter(|p| !sync_dir.join(p).exists())
-        .collect();
+        .map(|target| targets::build_engine(&config, target))
+        .collect::<Result<Vec<_>>>()?;
 
-    let stale_folders = state
-        .all_folders()?
-        .into_iter()
-        .map(|r| r.local_path)
-        .filter(|p| !sync_dir.join(p).is_dir())
-        .collect();
+    supervisor::run(engines).await?;
 
-    Ok((stale_files, stale_folders))
-}
-
-/// Drops tracking records that point at local files which no longer exist, leaving the
-/// server untouched, then forgets the cursor so the next pass rebuilds tracking from the
-/// server's own view. This recovers from state that drifted out of agreement with the
-/// filesystem — for example records written at the sync root because a file's parent
-/// folder could not be resolved at the time.
-fn repair_state(engine: &sync::SyncEngine, dry_run: bool) -> Result<()> {
-    let sync_dir = engine.sync_dir();
-    let state = engine.state();
-
-    let (stale_files, stale_folders) = stale_records(state, sync_dir)?;
-
-    if stale_files.is_empty() && stale_folders.is_empty() {
-        ui::step("State is consistent with the filesystem — nothing to repair");
-        return Ok(());
-    }
-
-    if dry_run {
-        ui::warn(&format!(
-            "would drop {} stale file record(s) and {} stale folder record(s); the server would not be touched",
-            stale_files.len(),
-            stale_folders.len()
-        ));
-        return Ok(());
-    }
-
-    for path in &stale_files {
-        state.remove_file(path)?;
-    }
-    for path in &stale_folders {
-        state.remove_folder(path)?;
-    }
-    state.clear_cursor()?;
-
-    ui::success(&format!(
-        "Dropped {} stale file record(s) and {} stale folder record(s) — the server was not modified",
-        stale_files.len(),
-        stale_folders.len()
-    ));
+    println!("\n[nuage] stopped");
     Ok(())
 }

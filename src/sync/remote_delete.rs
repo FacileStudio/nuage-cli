@@ -44,7 +44,7 @@ impl SyncEngine {
             None => return Ok(false),
         };
 
-        let local_path = self.sync_dir.join(&record.local_path);
+        let local_path = self.target.dir.join(&record.local_path);
 
         if self.options.dry_run {
             report
@@ -73,7 +73,7 @@ impl SyncEngine {
             None => return Ok(false),
         };
 
-        let local_path = self.sync_dir.join(&record.local_path);
+        let local_path = self.target.dir.join(&record.local_path);
 
         if self.options.dry_run {
             report

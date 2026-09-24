@@ -1,14 +1,24 @@
 use super::{
-    ApiClient, ApiFile, ApiFolder, FolderDetailResponse, FoldersListResponse, SearchApiResponse,
-    SearchResultItem,
+    ApiClient, ApiFile, ApiFolder, FileListResponse, FolderDetailResponse, FoldersListResponse,
+    SearchApiResponse, SearchResultItem,
 };
 use anyhow::{Context, Result};
 
 impl ApiClient {
+    /// Creates a folder, in the client's space when one is selected.
+    ///
+    /// `POST /folders` reads `space_id` from the body and ignores the query
+    /// string, unlike the file endpoints. Sending only the query prefix creates
+    /// the folder in the caller's personal space while the rest of the run is
+    /// scoped elsewhere, and every upload that then names that folder is
+    /// refused with `parent folder not found`.
     pub async fn create_folder(&self, name: &str, parent_id: Option<i64>) -> Result<ApiFolder> {
         let mut body = serde_json::json!({ "name": name });
         if let Some(pid) = parent_id {
             body["parent_id"] = serde_json::json!(pid);
+        }
+        if let Some(sid) = self.space_id() {
+            body["space_id"] = serde_json::json!(sid);
         }
 
         let client = self.client();
@@ -65,41 +75,6 @@ impl ApiClient {
         resp.json()
             .await
             .with_context(|| format!("failed to parse update file {} response", id))
-    }
-
-    pub async fn update_folder(
-        &self,
-        id: i64,
-        name: Option<&str>,
-        parent_id: Option<Option<i64>>,
-    ) -> Result<ApiFolder> {
-        let mut body = serde_json::Map::new();
-        if let Some(n) = name {
-            body.insert("name".into(), serde_json::json!(n));
-        }
-        if let Some(pid) = parent_id {
-            body.insert("parent_id".into(), serde_json::json!(pid.unwrap_or(0)));
-        }
-
-        let client = self.client();
-        let url = self.scoped_url(format!("{}/folders/{}", self.base_url(), id));
-        let token = self.token();
-
-        let resp = self
-            .send_with_retry(&format!("failed to update folder {}", id), || {
-                client.put(&url).bearer_auth(token).json(&body).send()
-            })
-            .await?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body_text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("PUT /folders/{} failed ({}): {}", id, status, body_text);
-        }
-
-        resp.json()
-            .await
-            .with_context(|| format!("failed to parse update folder {} response", id))
     }
 
     pub async fn delete_file(&self, id: i64) -> Result<()> {
@@ -162,6 +137,31 @@ impl ApiClient {
         let list: FoldersListResponse =
             resp.json().await.context("failed to parse folders list")?;
         Ok(list.folders)
+    }
+
+    /// Files sitting at the root of the client's space.
+    ///
+    /// Separate from `sync_state`, which ignores `space_id` and therefore
+    /// answers with every space's tree merged.
+    pub async fn list_root_files(&self) -> Result<Vec<ApiFile>> {
+        let client = self.client();
+        let url = self.scoped_url(format!("{}/files", self.base_url()));
+        let token = self.token();
+
+        let resp = self
+            .send_with_retry("failed to list files", || {
+                client.get(&url).bearer_auth(token).send()
+            })
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GET /files failed ({}): {}", status, body);
+        }
+
+        let list: FileListResponse = resp.json().await.context("failed to parse files list")?;
+        Ok(list.files)
     }
 
     pub async fn get_folder(&self, id: i64) -> Result<FolderDetailResponse> {

@@ -90,22 +90,6 @@ pub async fn resolve_path(api: &ApiClient, path: &str) -> Result<ResolvedPath> {
     resolve_nested(api, root_folder.id, &parts[1..], path).await
 }
 
-pub fn resolve_parent_and_name(path: &str) -> (&str, &str) {
-    let trimmed = path.trim_end_matches('/');
-    match trimmed.rfind('/') {
-        Some(pos) => {
-            let parent = &trimmed[..pos];
-            let name = &trimmed[pos + 1..];
-            if parent.is_empty() {
-                ("/", name)
-            } else {
-                (parent, name)
-            }
-        }
-        None => ("/", trimmed),
-    }
-}
-
 pub async fn resolve_folder_id(api: &ApiClient, path: &str) -> Result<Option<i64>> {
     match resolve_path(api, path).await? {
         ResolvedPath::Root => Ok(None),

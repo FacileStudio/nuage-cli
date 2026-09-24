@@ -78,9 +78,9 @@ impl SyncEngine {
         };
 
         if folder_path.is_empty() {
-            Ok(Some(self.sync_dir.join(&file.name)))
+            Ok(Some(self.target.dir.join(&file.name)))
         } else {
-            Ok(Some(self.sync_dir.join(&folder_path).join(&file.name)))
+            Ok(Some(self.target.dir.join(&folder_path).join(&file.name)))
         }
     }
 
@@ -94,9 +94,9 @@ impl SyncEngine {
         };
 
         if parent_path.is_empty() {
-            Ok(Some(self.sync_dir.join(&folder.name)))
+            Ok(Some(self.target.dir.join(&folder.name)))
         } else {
-            Ok(Some(self.sync_dir.join(&parent_path).join(&folder.name)))
+            Ok(Some(self.target.dir.join(&parent_path).join(&folder.name)))
         }
     }
 
@@ -136,7 +136,7 @@ impl SyncEngine {
     }
 
     fn materialize_local_folder(&self, folder: &ApiFolder, relative: &str) -> Result<()> {
-        let local_path = self.sync_dir.join(relative);
+        let local_path = self.target.dir.join(relative);
         std::fs::create_dir_all(&local_path)
             .with_context(|| format!("cannot create folder: {}", local_path.display()))?;
         self.record_folder(folder, relative)

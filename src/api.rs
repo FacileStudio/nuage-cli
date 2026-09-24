@@ -107,6 +107,11 @@ impl ApiClient {
         &self.inner.token
     }
 
+    /// The space this client is scoped to, when one is.
+    pub(crate) fn space_id(&self) -> Option<i64> {
+        self.inner.space_id
+    }
+
     fn client(&self) -> &reqwest::Client {
         &self.inner.client
     }

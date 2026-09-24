@@ -110,26 +110,6 @@ impl ApiClient {
                 |()| DownloadOutcome::Done,
             )
     }
-
-    pub async fn download_file_stream(&self, id: i64) -> Result<reqwest::Response> {
-        let client = self.transfer();
-        let url = self.scoped_url(format!("{}/files/{}/download", self.base_url(), id));
-        let token = self.token();
-
-        let resp = self
-            .send_with_retry(&format!("failed to download file {}", id), || {
-                client.get(&url).bearer_auth(token).send()
-            })
-            .await?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("GET /files/{}/download failed ({}): {}", id, status, body);
-        }
-
-        Ok(resp)
-    }
 }
 
 async fn stream_response_to_file(

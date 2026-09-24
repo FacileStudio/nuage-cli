@@ -21,11 +21,16 @@ pub(super) fn prompt_token() -> Result<String> {
     Ok(token)
 }
 
+/// Asks where the account's own tree should live.
+///
+/// Only the personal space is mapped here: `spaces:` is a map, and the other
+/// spaces are added to it by hand or by `nuage spaces create` once the login
+/// has a token to reach the server with.
 pub(super) fn ask_sync_dir() -> Result<String> {
     if !io::stdin().is_terminal() {
         return Ok(DEFAULT_SYNC_DIR.to_string());
     }
-    print!("Sync directory [{DEFAULT_SYNC_DIR}]: ");
+    print!("Personal space directory [{DEFAULT_SYNC_DIR}]: ");
     io::stdout().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;

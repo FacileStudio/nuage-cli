@@ -1,11 +1,8 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
-use super::env::{env_server_url, env_space, env_token};
-
-fn default_sync_dir() -> String {
-    "~/Nuage".to_string()
-}
+use super::env::{env_server_url, env_token};
 
 fn default_poll_interval() -> u64 {
     30
@@ -17,20 +14,20 @@ pub struct Config {
     pub server_url: String,
     #[serde(default)]
     pub token: String,
-    #[serde(default = "default_sync_dir")]
-    pub sync_dir: String,
+    /// Every space this account syncs, keyed by space name.
+    ///
+    /// Each value is the directory that space keeps in step with the server.
+    /// The daemon runs one engine per entry. A `BTreeMap` orders the keys on
+    /// write and makes a duplicate name impossible. An empty map is skipped so a
+    /// config nobody has mapped a space in keeps the shape it already had.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub spaces: BTreeMap<String, String>,
     #[serde(default = "default_poll_interval")]
     pub poll_interval: u64,
     #[serde(default)]
     pub ignore_patterns: Vec<String>,
     #[serde(default)]
     pub selective_sync: Vec<String>,
-    /// The space every request is scoped to, or the personal one when absent.
-    ///
-    /// Written by `nuage spaces use`, and skipped on serialize so a config that
-    /// never selected one keeps the shape it already had.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub space: Option<i64>,
 }
 
 /// A config nobody has written yet: the same field values the serde defaults
@@ -40,11 +37,10 @@ impl Default for Config {
         Self {
             server_url: String::new(),
             token: String::new(),
-            sync_dir: default_sync_dir(),
+            spaces: BTreeMap::new(),
             poll_interval: default_poll_interval(),
             ignore_patterns: Vec::new(),
             selective_sync: Vec::new(),
-            space: None,
         }
     }
 }
@@ -63,8 +59,8 @@ impl Config {
     /// `login` and `logout` need this: refusing to run because the very field
     /// they are about to write is missing would make the config unrepairable by
     /// the command that exists to repair it. It is also the read half of the
-    /// read-modify-write that keeps `sync_dir`, `ignore_patterns` and
-    /// `selective_sync` — which belong to the user, not to the login — intact.
+    /// read-modify-write that keeps `ignore_patterns` and `selective_sync` —
+    /// which belong to the user, not to the login — intact.
     pub fn load_or_default() -> Result<Self> {
         let path = Self::path()?;
         match std::fs::read_to_string(&path) {
@@ -84,9 +80,6 @@ impl Config {
         }
         if let Some(token) = env_token() {
             self.token = token;
-        }
-        if let Some(space) = env_space()? {
-            self.space = Some(space);
         }
         Ok(())
     }

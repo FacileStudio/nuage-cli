@@ -1,8 +1,8 @@
 ---
 name: nuage
 description: >
-  Facile cloud storage CLI and sync daemon. Use when the user asks to upload,
-  download, sync, search, or share files with Nuage.
+  Facile cloud storage CLI and sync daemon. Use when the user asks to sync,
+  search, or share files with Nuage.
 ---
 
 # nuage — Facile cloud storage
@@ -12,28 +12,25 @@ Config: `~/.nuage.yml`
 
 ## When to apply
 
-Use when the user mentions file sync, cloud storage, uploading, downloading, sharing files, or Nuage.
-Triggers: "upload", "download", "sync", "share", "cloud", "nuage", "share link", "remote files"
+Use when the user mentions file sync, cloud storage, sharing files, spaces, or Nuage.
+Triggers: "sync", "share", "cloud", "nuage", "share link", "remote files", "space"
 
 ## Commands
 
 ### Daemon
 ```
-nuage start                    Start background sync daemon
+nuage start                    Start background sync daemon (one task per mapped space)
 nuage stop                     Stop daemon
 nuage restart                  Restart daemon
-nuage status                   Show sync/daemon status
+nuage status                   Show sync/daemon status, one block per space
 nuage logs [-f]                Show/follow daemon logs
+nuage sync                     One-shot sync of every mapped space
+nuage watch                    Foreground watcher
 ```
 
-### File operations
+### Reads
 ```
 nuage ls [path] [-l]           List remote files
-nuage upload <src> [dest]      Upload file (src="-" for stdin)
-nuage download <path> [dest]   Download file
-nuage mkdir <path>             Create remote folder
-nuage mv <src> <dest>          Move/rename
-nuage rm <path> [-f]           Delete (-f skips confirmation)
 nuage search <query>           Search files
   -t file|folder              Filter by type
   -f <folder>                 Scope to folder
@@ -63,9 +60,10 @@ nuage keys revoke <id> [--yes]
 
 ### Spaces
 ```
-nuage spaces list              List spaces, personal first
-nuage spaces use <name-or-id>  Select the space every command acts on
-nuage spaces use personal      Go back to your own files (--none is an alias)
+nuage spaces list                          List spaces, with sync directory when mapped
+nuage spaces create <name> [-d <text>]     Create a space
+nuage spaces rename <name-or-id> <new>     Rename a space
+nuage spaces rm <name-or-id> [--yes]       Delete a space (prompts; refuses personal)
 ```
 
 ### Setup
@@ -77,23 +75,26 @@ nuage upgrade                  Self-upgrade
 ```
 
 ## Rules
-- `nuage login` opens a browser. Never run it unattended — suggest `nuage login --token`, or
-  `NUAGE_TOKEN`, on a machine with no display
+- **The daemon is the only writer.** `nuage upload`, `download`, `mkdir`, `mv` and `rm` are
+  removed. To put a file in a space, drop it in that space's mapped directory and it syncs; to
+  delete one, delete it there
+- `nuage` with no arguments prints help and exits 0. It does not sync; use `nuage sync` or
+  `nuage watch`
 - `NUAGE_TOKEN`, `NUAGE_SERVER_URL` and `NUAGE_SPACE` override `~/.nuage.yml`; prefer them over
   editing the file
-- Every command answers from **one space**, the personal one unless a space is selected. A path
-  that exists only in a shared space reports `not found` until you pass `--space <name-or-id>`
-  or run `nuage spaces use`. `--space` is global and accepts a name or an id
-- `personal` names the account's own files wherever a space is named, case-insensitively:
-  `nuage spaces use personal` and `nuage --space personal <cmd>`. It is the only name the server
-  does not know, so it never appears in `GET /spaces`
-- `nuage spaces list --json` prints `{"selected": <id|null>, "spaces": [...]}`, where `selected`
-  is `null` for the personal space. Before 0.5.0 it printed the bare array now under `spaces`
-- The sync daemon is deliberately not scoped by the selection: it syncs every visible space into
-  one `sync_dir`
-- `login` and `logout` only touch `server_url` and `token`; the user's sync settings survive
-- All file/share/search/token/keys commands support `--json`
+- The read commands (`ls`, `search`, `share`, `shares`) answer from the personal space unless
+  `NUAGE_SPACE` names another for that run. `NUAGE_SPACE` takes a space name or an id
+- `~/.nuage.yml` maps each space to a directory under `spaces:`, and the daemon syncs every
+  mapping in parallel, each into its own directory. A config with no `spaces:` block is refused
+  with `no spaces mapped`; the pre-0.8.0 `sync_dir` key is not read
+- `personal` names the account's own files wherever a space is named, case-insensitively. It is
+  the only name the server does not know, so it never appears in `GET /spaces`
+- `nuage spaces list --json` prints `{"spaces":[{...,"sync_dir": ...}]}`. `sync_dir` is the
+  mapped directory or `null`; there is no `selected` field
+- `login` and `logout` only touch `server_url` and `token` (and `spaces` on a first run); the
+  user's sync settings survive
+- All read/share/search/token/keys/spaces commands support `--json`
 - Daemon commands do NOT support `--json`
-- Confirm before `rm` unless user says `-f`
+- Confirm before `spaces rm` unless the user passes `--yes`
 - Use `--json` when parsing output programmatically
 - Run `nuage -h` for exact syntax when unsure

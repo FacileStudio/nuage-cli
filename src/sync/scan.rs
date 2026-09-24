@@ -8,11 +8,11 @@ impl SyncEngine {
     /// Verifies the sync directory is present and looks like the one the state database
     /// was built against, so a missing mount cannot be mistaken for a mass deletion.
     pub fn preflight(&self) -> Result<()> {
-        if !self.sync_dir.exists() {
-            bail!("sync directory {} does not exist", self.sync_dir.display());
+        if !self.target.dir.exists() {
+            bail!("sync directory {} does not exist", self.target.dir.display());
         }
-        if !self.sync_dir.is_dir() {
-            bail!("sync path {} is not a directory", self.sync_dir.display());
+        if !self.target.dir.is_dir() {
+            bail!("sync path {} is not a directory", self.target.dir.display());
         }
         Ok(())
     }
@@ -21,7 +21,7 @@ impl SyncEngine {
     /// outside it. Treating an outside path as relative would corrupt state, so callers
     /// skip rather than guess.
     pub(super) fn relative_path(&self, path: &Path) -> Option<String> {
-        match path.strip_prefix(&self.sync_dir) {
+        match path.strip_prefix(&self.target.dir) {
             Ok(p) if p.as_os_str().is_empty() => None,
             Ok(p) => Some(p.to_string_lossy().to_string()),
             Err(_) => {
@@ -33,7 +33,7 @@ impl SyncEngine {
 
     pub(super) fn scan_local_files(&self) -> Result<Vec<(String, PathBuf)>> {
         let mut files = Vec::new();
-        self.scan_dir_recursive(&self.sync_dir, &mut files, 0)?;
+        self.scan_dir_recursive(&self.target.dir, &mut files, 0)?;
         Ok(files)
     }
 
@@ -135,7 +135,7 @@ impl SyncEngine {
 
     pub(super) async fn ensure_all_local_folders(&self, report: &mut SyncReport) -> Result<()> {
         let mut folders = Vec::new();
-        self.scan_local_folders(&self.sync_dir, &mut folders, 0)?;
+        self.scan_local_folders(&self.target.dir, &mut folders, 0)?;
         folders.sort_by_key(|(rel, _)| rel.matches('/').count());
 
         for (relative, full_path) in folders {

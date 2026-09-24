@@ -1,7 +1,8 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use std::io::{self, IsTerminal};
 
 use crate::api::ApiClient;
+use crate::commands::space::PERSONAL;
 use crate::config::{self, Config};
 use crate::ui;
 
@@ -36,7 +37,7 @@ pub async fn run(server: Option<String>, force_token: bool) -> Result<()> {
     config.server_url = api.clone();
     config.token = token;
     if fresh {
-        config.sync_dir = ask_sync_dir()?;
+        config.spaces.insert(PERSONAL.to_string(), ask_sync_dir()?);
         config.ignore_patterns = DEFAULT_IGNORE.iter().map(|p| p.to_string()).collect();
     }
 
@@ -87,7 +88,7 @@ async fn acquire_token(api: &str, auth: &AuthConfig, force_token: bool) -> Resul
 
 async fn finish_login(config: &Config) -> Result<()> {
     ui::step("Testing the connection");
-    let client = ApiClient::new(&config.server_url, &config.token, config.space)?;
+    let client = ApiClient::new(&config.server_url, &config.token, None)?;
     client.test_connection().await?;
 
     config.save()?;
@@ -96,10 +97,12 @@ async fn finish_login(config: &Config) -> Result<()> {
         Config::path()?.display()
     ));
 
-    let sync_path = config.sync_dir_expanded()?;
-    std::fs::create_dir_all(&sync_path)
-        .with_context(|| format!("cannot create the sync directory {}", sync_path.display()))?;
-    ui::success(&format!("Sync directory ready at {}", sync_path.display()));
+    for (name, dir) in config.spaces_expanded()? {
+        ui::success(&format!("{name}: directory ready at {}", dir.display()));
+    }
+    if config.spaces.is_empty() {
+        ui::warn("no spaces mapped — add a `spaces:` block to ~/.nuage.yml to sync anything");
+    }
     ui::hint("Run `nuage start` to sync in the background, or `nuage watch` in the foreground.");
     Ok(())
 }
