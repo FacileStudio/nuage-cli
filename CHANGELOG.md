@@ -11,7 +11,7 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
-## [0.7.0] - 2026-09-01
+## [0.7.0] - 2026-09-24
 
 ### Added
 
@@ -20,6 +20,25 @@ tag is v0.2.0; everything before it is folded into that entry.
 - `nuage keys create` creates secret or public API keys with optional `--origins` and `--quota` flags.
 - `nuage keys revoke` revokes API keys by id.
 - Full `--json` support for all `nuage keys` commands.
+
+### Changed
+
+- **Oversized modules split into focused files.** `main.rs`, `api.rs`, `login.rs`,
+  `sync/mod.rs`, `sync/state.rs`, `config.rs`, `ignore.rs` and `daemon.rs` had
+  each grown past their remit; their contents now sit in modules beside them.
+  Public behaviour is unchanged.
+
+### Fixed
+
+- **`nuage keys revoke` now asks before revoking.** `--yes` was accepted and
+  documented as skipping a confirmation that did not exist, so the command
+  revoked straight away. It prompts now, and `--yes` skips the prompt.
+
+### Security
+
+- Bumped rustls 0.23.40 -> 0.23.45, h2 0.4.14 -> 0.4.16 and anyhow
+  1.0.102 -> 1.0.103 to patched versions, clearing three advisories
+  (GHSA-2mjx-qc3c-rqvc, RUSTSEC-2026-0258, RUSTSEC-2026-0190).
 
 ## [0.6.0] — 2026-08-30
 
