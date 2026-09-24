@@ -13,6 +13,7 @@ pub mod supervisor;
 pub mod sync_cmds;
 pub mod targets;
 pub mod tokens;
+pub mod upgrade;
 
 use clap::Args;
 
