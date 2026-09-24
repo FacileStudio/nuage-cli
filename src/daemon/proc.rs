@@ -48,6 +48,14 @@ pub fn is_running() -> Result<Option<u32>> {
     }
 }
 
+/// The subcommands that fork a daemon, and so the argv a live daemon can show.
+///
+/// `daemonize` keeps the argv it was forked with, so a daemon started by
+/// `nuage upgrade` still reads as `nuage upgrade` for the rest of its life.
+/// Matching only `start` would report that daemon as stopped, and `start`
+/// would then run a second daemon over the same directories and state database.
+const DAEMON_SUBCOMMANDS: [&str; 3] = ["start", "restart", "upgrade"];
+
 /// Whether the process at `pid` is a daemon this CLI started.
 ///
 /// `None` means the answer could not be determined, which is treated as
@@ -70,14 +78,53 @@ fn is_daemon_process(pid: u32) -> Option<bool> {
         return Some(false);
     }
 
+    Some(is_daemon_args(&args))
+}
+
+fn is_daemon_args(args: &str) -> bool {
     let mut tokens = args.split_whitespace();
     let exe = tokens.next().unwrap_or("");
     let base = exe.rsplit('/').next().unwrap_or(exe);
-    if !base.starts_with("nuage") {
-        return Some(false);
+
+    base == "nuage"
+        && tokens
+            .next()
+            .is_some_and(|sub| DAEMON_SUBCOMMANDS.contains(&sub))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A daemon keeps the argv it was forked with, so every subcommand that can
+    // fork one has to read as a daemon. Seeing `upgrade` here and calling it
+    // stopped is what lets `nuage start` run a second daemon over the first.
+    #[test]
+    fn every_argv_a_forked_daemon_can_show_reads_as_a_daemon() {
+        for args in [
+            "nuage start",
+            "nuage restart",
+            "nuage upgrade",
+            "/home/yann/.local/bin/nuage start",
+            "nuage start --json",
+        ] {
+            assert!(is_daemon_args(args), "{args}");
+        }
     }
 
-    // The daemon is forked by `daemonize`, which keeps the argv it was started
-    // with, so a real daemon still reads as `nuage start` or `nuage restart`.
-    Some(matches!(tokens.next(), Some("start") | Some("restart")))
+    // The pid file outlives a daemon that died without cleanup, and the kernel
+    // recycles pids, so the file can point at something that is not ours.
+    #[test]
+    fn one_shot_commands_and_other_programs_do_not() {
+        for args in [
+            "nuage",
+            "nuage sync",
+            "nuage ls /",
+            "nuage spaces list",
+            "nuagectl start",
+            "/usr/bin/postgres -D /var/lib/postgresql",
+        ] {
+            assert!(!is_daemon_args(args), "{args}");
+        }
+    }
 }
