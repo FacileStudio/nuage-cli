@@ -11,15 +11,7 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
-## [0.7.0] - 2026-09-24
-
-### Added
-
-- `nuage keys {list,create,revoke}` command group for managing API keys.
-- `nuage keys list` supports filtering keys by application name with `--app`.
-- `nuage keys create` creates secret or public API keys with optional `--origins` and `--quota` flags.
-- `nuage keys revoke` revokes API keys by id.
-- Full `--json` support for all `nuage keys` commands.
+## [0.7.1] - 2026-09-24
 
 ### Changed
 
@@ -39,6 +31,16 @@ tag is v0.2.0; everything before it is folded into that entry.
 - Bumped rustls 0.23.40 -> 0.23.45, h2 0.4.14 -> 0.4.16 and anyhow
   1.0.102 -> 1.0.103 to patched versions, clearing three advisories
   (GHSA-2mjx-qc3c-rqvc, RUSTSEC-2026-0258, RUSTSEC-2026-0190).
+
+## [0.7.0] - 2026-09-01
+
+### Added
+
+- `nuage keys {list,create,revoke}` command group for managing API keys.
+- `nuage keys list` supports filtering keys by application name with `--app`.
+- `nuage keys create` creates secret or public API keys with optional `--origins` and `--quota` flags.
+- `nuage keys revoke` revokes API keys by id.
+- Full `--json` support for all `nuage keys` commands.
 
 ## [0.6.0] — 2026-08-30
 
@@ -182,7 +184,8 @@ tag is v0.2.0; everything before it is folded into that entry.
   them.
 - The daemon guards against PID 0 and stops creating a directory twice.
 
-[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/FacileStudio/nuage-cli/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.4.0...v0.5.0
