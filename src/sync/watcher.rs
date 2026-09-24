@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
-use std::path::PathBuf;
+use notify_debouncer_mini::{new_debouncer, DebouncedEvent, DebouncedEventKind};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -11,6 +11,32 @@ pub struct FsWatcher {
     receiver: mpsc::Receiver<Vec<PathBuf>>,
 }
 
+fn relative_to(path: &Path, sync_dir: &Path) -> Option<String> {
+    let relative = path.strip_prefix(sync_dir).ok()?;
+    Some(relative.to_string_lossy().to_string())
+}
+
+fn keep_event(path: &Path, sync_dir: &Path, ignore: &IgnoreRules) -> Option<PathBuf> {
+    let relative = relative_to(path, sync_dir)?;
+    if ignore.is_ignored(&relative) {
+        return None;
+    }
+    Some(path.to_path_buf())
+}
+
+fn changed_paths(
+    events: Vec<DebouncedEvent>,
+    sync_dir: &Path,
+    patterns: Vec<String>,
+) -> Vec<PathBuf> {
+    let ignore = IgnoreRules::new(patterns);
+    events
+        .into_iter()
+        .filter(|e| e.kind == DebouncedEventKind::Any)
+        .filter_map(|e| keep_event(&e.path, sync_dir, &ignore))
+        .collect()
+}
+
 impl FsWatcher {
     pub fn new(sync_dir: &PathBuf, ignore_rules: &IgnoreRules) -> Result<Self> {
         let (tx, rx) = mpsc::channel();
@@ -19,31 +45,13 @@ impl FsWatcher {
 
         let mut debouncer = new_debouncer(
             Duration::from_secs(2),
-            move |events: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
-                let ignore = IgnoreRules::new(patterns.clone());
-                if let Ok(evts) = events {
-                    let paths: Vec<PathBuf> = evts
-                        .into_iter()
-                        .filter(|e| e.kind == DebouncedEventKind::Any)
-                        .filter_map(|e| {
-                            let path = &e.path;
-                            let relative = path
-                                .strip_prefix(&sync_dir_clone)
-                                .ok()?
-                                .to_string_lossy()
-                                .to_string();
-                            if ignore.is_ignored(&relative) {
-                                None
-                            } else {
-                                Some(path.clone())
-                            }
-                        })
-                        .collect();
-
-                    if !paths.is_empty() {
-                        let _ = tx.send(paths);
-                    }
+            move |events: Result<Vec<DebouncedEvent>, notify::Error>| {
+                let Ok(evts) = events else { return };
+                let paths = changed_paths(evts, &sync_dir_clone, patterns.clone());
+                if paths.is_empty() {
+                    return;
                 }
+                let _ = tx.send(paths);
             },
         )
         .context("failed to create filesystem watcher")?;

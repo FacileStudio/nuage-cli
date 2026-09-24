@@ -7,8 +7,8 @@ use std::path::Path;
 const BUFFER_SIZE: usize = 65536;
 
 pub fn hash_file(path: &Path) -> Result<String> {
-    let file =
-        File::open(path).with_context(|| format!("cannot open file for hashing: {}", path.display()))?;
+    let file = File::open(path)
+        .with_context(|| format!("cannot open file for hashing: {}", path.display()))?;
     let mut reader = BufReader::with_capacity(BUFFER_SIZE, file);
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; BUFFER_SIZE];

@@ -3,6 +3,13 @@ use std::path::{Path, PathBuf};
 
 use crate::api::{ApiClient, ApiFile};
 
+mod mime;
+
+#[cfg(test)]
+mod tests;
+
+pub use mime::mime_from_extension;
+
 /// Files at or below this size go through the plain multipart endpoint; larger
 /// ones use the chunked upload session endpoints.
 pub const CHUNKED_THRESHOLD: u64 = 64 * 1024 * 1024;
@@ -116,46 +123,6 @@ pub fn temp_path_for(dest: &Path, file_id: i64) -> PathBuf {
     }
 }
 
-pub fn mime_from_extension(path: &Path) -> String {
-    let ext = path
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-
-    match ext.as_str() {
-        "pdf" => "application/pdf",
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        "mp4" => "video/mp4",
-        "webm" => "video/webm",
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "ogg" => "audio/ogg",
-        "txt" => "text/plain",
-        "html" | "htm" => "text/html",
-        "css" => "text/css",
-        "js" => "application/javascript",
-        "json" => "application/json",
-        "xml" => "application/xml",
-        "zip" => "application/zip",
-        "tar" => "application/x-tar",
-        "gz" => "application/gzip",
-        "doc" => "application/msword",
-        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "xls" => "application/vnd.ms-excel",
-        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "ppt" => "application/vnd.ms-powerpoint",
-        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "csv" => "text/csv",
-        "md" => "text/markdown",
-        _ => "application/octet-stream",
-    }
-    .to_string()
-}
-
 pub fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{} B", bytes)
@@ -165,63 +132,5 @@ pub fn format_size(bytes: u64) -> String {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     } else {
         format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ignore::is_temp_artifact;
-
-    #[test]
-    fn temp_paths_differ_for_same_stem_different_extension() {
-        let md = temp_path_for(Path::new("/home/u/notes.md"), 1);
-        let pdf = temp_path_for(Path::new("/home/u/notes.pdf"), 2);
-        assert_ne!(md, pdf);
-    }
-
-    #[test]
-    fn temp_paths_differ_for_same_name_different_id() {
-        let a = temp_path_for(Path::new("/home/u/notes.md"), 1);
-        let b = temp_path_for(Path::new("/home/u/notes.md"), 2);
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn temp_path_is_a_hidden_sibling_of_dest() {
-        let dest = Path::new("/home/u/docs/notes.md");
-        let tmp = temp_path_for(dest, 42);
-        assert_eq!(tmp.parent(), dest.parent());
-        assert_eq!(
-            tmp.file_name().unwrap().to_string_lossy(),
-            ".notes.md.nuage-tmp-42"
-        );
-    }
-
-    #[test]
-    fn is_temp_artifact_accepts_generated_names() {
-        for (name, id) in [("notes.md", 1i64), ("archive.tar.gz", 7), ("noext", 99)] {
-            let tmp = temp_path_for(Path::new("/home/u").join(name).as_path(), id);
-            let file_name = tmp.file_name().unwrap().to_string_lossy().to_string();
-            assert!(is_temp_artifact(&file_name), "rejected {}", file_name);
-        }
-    }
-
-    #[test]
-    fn is_temp_artifact_rejects_ordinary_names() {
-        assert!(!is_temp_artifact("notes.md"));
-        assert!(!is_temp_artifact(".notes.md"));
-        assert!(!is_temp_artifact("notes.nuage-tmp-1"));
-        assert!(!is_temp_artifact(".hidden"));
-    }
-
-    #[test]
-    fn format_size_boundaries() {
-        assert_eq!(format_size(0), "0 B");
-        assert_eq!(format_size(1023), "1023 B");
-        assert_eq!(format_size(1024), "1.0 KB");
-        assert_eq!(format_size(1024 * 1024 - 1), "1024.0 KB");
-        assert_eq!(format_size(1024 * 1024), "1.0 MB");
-        assert_eq!(format_size(1024 * 1024 * 1024), "1.0 GB");
     }
 }
