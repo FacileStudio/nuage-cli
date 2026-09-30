@@ -56,6 +56,11 @@ impl SyncEngine {
     ) -> Result<Option<(ApiFile, PathBuf)>> {
         let facile_id = file.id.to_string();
 
+        if crate::ignore::is_temp_artifact(&file.name) {
+            debug!("skipping our temp artifact {} ({})", file.name, facile_id);
+            return Ok(None);
+        }
+
         if self.state.is_quarantined(&facile_id)? {
             debug!("skipping quarantined file {} ({})", file.name, facile_id);
             report.skipped += 1;

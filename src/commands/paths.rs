@@ -78,7 +78,7 @@ pub async fn resolve_path(api: &ApiClient, path: &str) -> Result<ResolvedPath> {
         return Ok(ResolvedPath::Root);
     }
 
-    let root_folders = api.list_folders().await?;
+    let root_folders = api.list_folders(None).await?;
     let first = parts[0];
     let root_match = root_folders.iter().find(|f| f.name == first);
 

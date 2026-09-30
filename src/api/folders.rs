@@ -1,5 +1,5 @@
 use super::{
-    ApiClient, ApiFile, ApiFolder, FolderDetailResponse, FoldersListResponse,
+    ApiClient, ApiFile, ApiFolder, FilesListResponse, FolderDetailResponse, FoldersListResponse,
     SearchApiResponse, SearchResultItem,
 };
 use anyhow::{Context, Result};
@@ -117,14 +117,20 @@ impl ApiClient {
         Ok(())
     }
 
-    pub async fn list_folders(&self) -> Result<Vec<ApiFolder>> {
+    /// Lists the folders directly inside `parent_id`, or the space's root when
+    /// it is `None`.
+    pub async fn list_folders(&self, parent_id: Option<i64>) -> Result<Vec<ApiFolder>> {
         let client = self.client();
         let url = self.scoped_url(format!("{}/folders", self.base_url()));
         let token = self.token();
 
         let resp = self
             .send_with_retry("failed to list folders", || {
-                client.get(&url).bearer_auth(token).send()
+                let mut request = client.get(&url).bearer_auth(token);
+                if let Some(pid) = parent_id {
+                    request = request.query(&[("parent_id", pid.to_string())]);
+                }
+                request.send()
             })
             .await?;
 
@@ -137,6 +143,33 @@ impl ApiClient {
         let list: FoldersListResponse =
             resp.json().await.context("failed to parse folders list")?;
         Ok(list.folders)
+    }
+
+    /// Lists the files directly inside `folder_id`, or the space's root files
+    /// when it is `None`.
+    pub async fn list_files(&self, folder_id: Option<i64>) -> Result<Vec<ApiFile>> {
+        let client = self.client();
+        let url = self.scoped_url(format!("{}/files", self.base_url()));
+        let token = self.token();
+
+        let resp = self
+            .send_with_retry("failed to list files", || {
+                let mut request = client.get(&url).bearer_auth(token);
+                if let Some(fid) = folder_id {
+                    request = request.query(&[("folder_id", fid.to_string())]);
+                }
+                request.send()
+            })
+            .await?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GET /files failed ({}): {}", status, body);
+        }
+
+        let list: FilesListResponse = resp.json().await.context("failed to parse files list")?;
+        Ok(list.files)
     }
 
     pub async fn get_folder(&self, id: i64) -> Result<FolderDetailResponse> {

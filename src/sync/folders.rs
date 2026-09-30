@@ -29,10 +29,60 @@ impl SyncEngine {
 
         let parent_id = self.find_parent_folder_id(&relative)?;
         let api_folder = self.api.create_folder(&name, parent_id).await?;
+
+        if api_folder.name != name
+            && self
+                .adopt_existing_folder(&api_folder, &name, parent_id, &relative)
+                .await?
+        {
+            return Ok(());
+        }
+
         self.record_folder(&api_folder, &relative)?;
 
         info!("↑ created folder: {}", relative);
         Ok(())
+    }
+
+    /// Handles a create the server renamed, which means the parent already held
+    /// a folder with the name.
+    ///
+    /// The folder the server has is the one this directory belongs to — state
+    /// this client lost is what makes the two look unrelated — so the empty
+    /// folder just created is dropped and the server's own folder takes this
+    /// path, with the local directory. Left alone, every folder of a re-synced
+    /// tree would be created a second time as `name (1)`.
+    async fn adopt_existing_folder(
+        &self,
+        created: &ApiFolder,
+        name: &str,
+        parent_id: Option<i64>,
+        relative: &str,
+    ) -> Result<bool> {
+        let Some(existing) = self
+            .api
+            .list_folders(parent_id)
+            .await?
+            .into_iter()
+            .find(|f| f.name == name)
+        else {
+            return Ok(false);
+        };
+
+        if let Err(e) = self.api.delete_folder(created.id).await {
+            warn!(
+                "could not remove the extra folder {} the create made ({}): {}",
+                relative, created.name, e
+            );
+            return Ok(false);
+        }
+
+        if !self.record_folder(&existing, relative)? {
+            return Ok(false);
+        }
+
+        info!("↩ adopted folder {} — the server already held it", relative);
+        Ok(true)
     }
 
     /// Records a folder at `relative`, first moving its local directory there if

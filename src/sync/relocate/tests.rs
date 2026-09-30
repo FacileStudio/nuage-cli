@@ -1,66 +1,7 @@
-use super::SyncEngine;
-use crate::api::{ApiClient, ApiFile, ApiFolder};
-use crate::config::Config;
-use crate::ignore::IgnoreRules;
-use crate::sync::state::{SyncState, UpsertFile, UpsertFolder};
-use crate::sync::{SyncReport, SyncTarget};
+mod support;
 
-fn temp_dir(label: &str) -> std::path::PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("nuage-relocate-{label}-{nanos}"));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    dir
-}
-
-fn engine_in(dir: &std::path::Path) -> SyncEngine {
-    let state = SyncState::new(dir).expect("state");
-    let api = ApiClient::new("http://127.0.0.1:1", "token", None).expect("api client");
-    let target = SyncTarget {
-        name: "test".to_string(),
-        space: None,
-        dir: dir.to_path_buf(),
-    };
-    SyncEngine::new(Config::default(), api, state, IgnoreRules::new(Vec::new()), target)
-}
-
-fn folder(id: i64, name: &str, parent: Option<i64>) -> ApiFolder {
-    ApiFolder {
-        id,
-        name: name.to_string(),
-        parent_id: parent,
-        space_id: None,
-        updated_at: "t".to_string(),
-    }
-}
-
-fn file(id: i64, name: &str) -> ApiFile {
-    ApiFile {
-        id,
-        name: name.to_string(),
-        hash: None,
-        size: None,
-        folder_id: None,
-        space_id: None,
-        mime_type: None,
-        updated_at: "t".to_string(),
-    }
-}
-
-fn tracked_folder(engine: &SyncEngine, facile_id: &str, path: &str) {
-    engine
-        .state()
-        .upsert_folder(&UpsertFolder {
-            facile_id: facile_id.to_string(),
-            name: path.rsplit('/').next().unwrap_or(path).to_string(),
-            local_path: path.to_string(),
-            synced_at: "t".to_string(),
-            ..Default::default()
-        })
-        .expect("upsert folder");
-}
+use crate::sync::SyncReport;
+use support::{engine_in, file, file_with_hash, folder, temp_dir, tracked_file, tracked_folder};
 
 #[test]
 fn a_reparented_folder_takes_its_content_to_the_new_path() {
@@ -113,25 +54,58 @@ fn a_file_the_server_moved_follows_it_locally() {
 
     std::fs::create_dir_all(dir.join("draft")).expect("dir");
     std::fs::write(dir.join("draft/contrat.pdf"), b"pdf").expect("write");
-    engine
-        .state()
-        .upsert_file(&UpsertFile {
-            facile_id: "77".to_string(),
-            name: "contrat.pdf".to_string(),
-            local_path: "draft/contrat.pdf".to_string(),
-            synced_at: "t".to_string(),
-            ..Default::default()
-        })
-        .expect("upsert file");
+    tracked_file(&engine, "77", "draft/contrat.pdf", None);
 
     let mut report = SyncReport::default();
     let moved = engine
-        .follow_remote_move(&file(77, "contrat.pdf"), "Clients/LPB/draft/contrat.pdf", &mut report)
+        .follow_remote_move(
+            &file(77, "contrat.pdf"),
+            "Clients/LPB/draft/contrat.pdf",
+            &mut report,
+        )
         .expect("follow the move");
 
     assert!(moved);
     assert!(dir.join("Clients/LPB/draft/contrat.pdf").is_file());
     assert!(!dir.join("draft/contrat.pdf").exists());
+
+    let rows = engine.state().all_files().expect("rows");
+    assert_eq!(rows.len(), 1, "the row follows the file");
+    assert_eq!(rows[0].local_path, "Clients/LPB/draft/contrat.pdf");
+
+    std::fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+// A file can be moved and edited in the same change. The moved copy has to be
+// tracked at its new path, but the hash the row keeps is the one both sides last
+// agreed on: recording the local hash would make the download pass read the edit
+// as an unchanged local file and overwrite it without keeping a copy.
+#[test]
+fn a_move_keeps_the_agreed_hash_for_a_conflict_to_resolve() {
+    let dir = temp_dir("moved-edited");
+    let engine = engine_in(&dir);
+
+    std::fs::create_dir_all(dir.join("draft")).expect("dir");
+    std::fs::write(dir.join("draft/notes.md"), b"mine").expect("write");
+    tracked_file(&engine, "77", "draft/notes.md", Some("base"));
+
+    let mut report = SyncReport::default();
+    let remote = file_with_hash(77, "notes.md", Some("theirs"));
+    let handled = engine
+        .follow_remote_move(&remote, "final/notes.md", &mut report)
+        .expect("follow the move");
+
+    assert!(
+        !handled,
+        "changed remote content still has to be downloaded"
+    );
+    let row = engine
+        .state()
+        .get_file("final/notes.md")
+        .expect("lookup")
+        .expect("some");
+    assert_eq!(row.facile_id, "77");
+    assert_eq!(row.hash.as_deref(), Some("base"));
 
     std::fs::remove_dir_all(&dir).expect("cleanup");
 }

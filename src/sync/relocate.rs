@@ -81,7 +81,15 @@ impl SyncEngine {
     /// Brings a file the server moved along locally, so its content is not left
     /// behind under the old name to be uploaded again as a duplicate.
     ///
-    /// Returns true when the file moved and needs nothing else this pass.
+    /// The tracking row follows the file. Left where it was, the moved copy
+    /// reads as a new local file to the next pass, which uploads it beside the
+    /// server's own copy — and the server, deduplicating the name, writes it back
+    /// as `name (1).ext`. The row keeps the hash both sides last agreed on, so a
+    /// file that was moved and edited at once still resolves as a conflict.
+    ///
+    /// Returns true when the move needs nothing else this pass. A content the
+    /// server has since changed returns false, leaving the download pass to
+    /// resolve it.
     pub(super) fn follow_remote_move(
         &self,
         file: &ApiFile,
@@ -106,7 +114,17 @@ impl SyncEngine {
 
         self.relocate_local_file(&record.local_path, relative)?;
         info!("↻ moved file {} → {}", record.local_path, relative);
-        Ok(true)
+
+        let dest = self.target.dir.join(relative);
+        let agreed_hash = record.hash.clone();
+        self.state.reparent_files(&record.local_path, relative)?;
+        self.record_file(file, relative, agreed_hash.as_deref(), &dest)?;
+
+        let moved_hash = hash::hash_file(&dest).ok();
+        Ok(match (moved_hash.as_deref(), file.hash.as_deref()) {
+            (Some(local), Some(remote)) => local == remote,
+            _ => true,
+        })
     }
 
     /// Moves a diverged local copy aside so the remote version can take its

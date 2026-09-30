@@ -3,11 +3,15 @@ use std::path::Path;
 use tracing::{info, warn};
 
 use super::state::UpsertFile;
-use super::SyncEngine;
+use super::{transfer, SyncEngine};
 use crate::api::ApiFile;
 use crate::hash;
-use crate::sync::transfer;
 
+#[cfg(test)]
+mod tests;
+
+/// Recording a file the local directory has, and uploading one the server does
+/// not have yet.
 impl SyncEngine {
     pub(super) fn record_file(
         &self,
@@ -46,9 +50,7 @@ impl SyncEngine {
     }
 
     /// Uploads a changed file as a new version of the existing server-side object, so its
-    /// id, share links, and history survive the edit. Falls back to create-then-delete
-    /// (in that order, never delete-first) when the object is too large for the
-    /// single-request reupload endpoint.
+    /// id, share links, and history survive the edit.
     pub(super) async fn push_local_file(&self, path: &Path, relative: &str) -> Result<()> {
         let current_hash = hash::hash_file(path)?;
 
@@ -70,54 +72,18 @@ impl SyncEngine {
             .await
     }
 
-    async fn update_remote_file(
-        &self,
-        facile_id: i64,
-        path: &Path,
-        relative: &str,
-        current_hash: &str,
-    ) -> Result<()> {
-        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    pub(super) async fn upload_new_file(&self, path: &Path, relative: &str) -> Result<()> {
+        let folder_id = self.find_parent_folder_id(relative)?;
+        let file_hash = hash::hash_file(path).ok();
+        let api_file = transfer::upload(&self.api, path, folder_id).await?;
 
-        if size <= transfer::CHUNKED_THRESHOLD {
-            let api_file = transfer::reupload(&self.api, facile_id, path).await?;
-            self.record_file(&api_file, relative, Some(current_hash), path)?;
-            info!("↑ updated {} ({})", relative, transfer::format_size(size));
+        if self
+            .adopt_existing_file(&api_file, relative, file_hash.as_deref())
+            .await?
+        {
             return Ok(());
         }
 
-        self.replace_remote_file(facile_id, path, relative, current_hash)
-            .await
-    }
-
-    async fn replace_remote_file(
-        &self,
-        facile_id: i64,
-        path: &Path,
-        relative: &str,
-        current_hash: &str,
-    ) -> Result<()> {
-        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        let folder_id = self.find_parent_folder_id(relative)?;
-        let api_file = transfer::upload(&self.api, path, folder_id).await?;
-        self.state.remove_file(relative)?;
-        self.record_file(&api_file, relative, Some(current_hash), path)?;
-
-        if let Err(e) = self.api.delete_file(facile_id).await {
-            warn!(
-                "uploaded new version of {} but could not remove the previous object {}: {}",
-                relative, facile_id, e
-            );
-        }
-
-        info!("↑ updated {} ({})", relative, transfer::format_size(size));
-        Ok(())
-    }
-
-    pub(super) async fn upload_new_file(&self, path: &Path, relative: &str) -> Result<()> {
-        let folder_id = self.find_parent_folder_id(relative)?;
-        let api_file = transfer::upload(&self.api, path, folder_id).await?;
-        let file_hash = hash::hash_file(path).ok();
         self.record_file(&api_file, relative, file_hash.as_deref(), path)?;
 
         let size_str = api_file
@@ -126,6 +92,66 @@ impl SyncEngine {
             .unwrap_or_default();
         info!("↑ uploaded {} ({})", relative, size_str);
         Ok(())
+    }
+
+    /// Handles a create the server renamed, which means that folder already held
+    /// a file with the name.
+    ///
+    /// Byte for byte the same file is already there — the usual cause is state
+    /// this client lost, which would otherwise re-upload a whole directory as
+    /// `name (1).ext` copies — so the copy just uploaded is dropped and the
+    /// server's own object takes the file's path. Content that differs is a real
+    /// second file: the server's rename keeps both, and both are tracked.
+    async fn adopt_existing_file(
+        &self,
+        created: &ApiFile,
+        relative: &str,
+        local_hash: Option<&str>,
+    ) -> Result<bool> {
+        let Some(existing) = self.same_name_object(created, relative).await? else {
+            return Ok(false);
+        };
+
+        if !adoptable(&existing, local_hash) {
+            warn!(
+                "{} is already on the server with different content — kept both, the server's copy is {}",
+                relative, created.name
+            );
+            return Ok(false);
+        }
+
+        if let Err(e) = self.api.delete_file(created.id).await {
+            warn!(
+                "could not remove the extra copy of {} the upload created ({}): {}",
+                relative, created.name, e
+            );
+            return Ok(false);
+        }
+
+        let dest = self.target.dir.join(relative);
+        self.record_file(&existing, relative, local_hash, &dest)?;
+        info!("↩ adopted {} — the server already held it", relative);
+        Ok(true)
+    }
+
+    /// The file the server already holds under the name this upload asked for,
+    /// which only exists when the server renamed the upload instead of storing
+    /// it there.
+    async fn same_name_object(&self, created: &ApiFile, relative: &str) -> Result<Option<ApiFile>> {
+        let Ok(name) = transfer::file_name_of(Path::new(relative)) else {
+            return Ok(None);
+        };
+        if created.name == name {
+            return Ok(None);
+        }
+
+        let folder_id = self.find_parent_folder_id(relative)?;
+        Ok(self
+            .api
+            .list_files(folder_id)
+            .await?
+            .into_iter()
+            .find(|f| f.name == name))
     }
 
     pub(super) async fn sync_folder_contents(&self, dir: &Path) -> Result<()> {
@@ -167,5 +193,16 @@ impl SyncEngine {
         }
 
         Ok(())
+    }
+}
+
+/// Whether the object the server already holds is the same file as the bytes
+/// that were just uploaded. Only identical content is adopted: a same-named file
+/// with different content is a real second file, and it is for the caller to keep
+/// both.
+fn adoptable(existing: &ApiFile, local_hash: Option<&str>) -> bool {
+    match (existing.hash.as_deref(), local_hash) {
+        (Some(server), Some(local)) => server == local,
+        _ => false,
     }
 }

@@ -91,6 +91,11 @@ pub struct DeletedItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilesListResponse {
+    pub files: Vec<ApiFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FoldersListResponse {
     pub folders: Vec<ApiFolder>,
 }

@@ -16,6 +16,7 @@ mod remote_delete;
 mod remote_folders;
 mod report;
 mod scan;
+mod update;
 
 #[cfg(test)]
 mod tests;

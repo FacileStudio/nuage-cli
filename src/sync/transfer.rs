@@ -14,6 +14,12 @@ pub use mime::mime_from_extension;
 /// ones use the chunked upload session endpoints.
 pub const CHUNKED_THRESHOLD: u64 = 64 * 1024 * 1024;
 
+/// The largest file an update can send through the single-request reupload
+/// endpoint. The server caps that request at 100 MiB, and the multipart envelope
+/// needs a slice of it. Anything above goes through the chunked endpoints, which
+/// hand the bytes to the server a chunk at a time.
+pub const REUPLOAD_MAX: u64 = 99 * 1024 * 1024;
+
 const TEMP_MARKER: &str = ".nuage-tmp-";
 
 /// Downloads a remote file to `dest` through a unique sibling temp file, then
@@ -75,35 +81,34 @@ pub async fn upload(api: &ApiClient, path: &Path, folder_id: Option<i64>) -> Res
 }
 
 /// Replaces the content of an existing remote file, preserving its id, share
-/// links and version history.
+/// links and version history. The file is streamed, never read into memory.
 pub async fn reupload(api: &ApiClient, file_id: i64, path: &Path) -> Result<ApiFile> {
-    let size = std::fs::metadata(path)
-        .with_context(|| format!("cannot stat file for reupload: {}", path.display()))?
-        .len();
-
-    if size > CHUNKED_THRESHOLD {
-        anyhow::bail!(
-            "reupload of files larger than {} is not supported: {}",
-            format_size(CHUNKED_THRESHOLD),
-            path.display()
-        );
-    }
-
     let name = file_name_of(path)?;
     let mime = mime_from_extension(path);
-
-    let data = std::fs::read(path)
-        .with_context(|| format!("cannot read file for reupload: {}", path.display()))?;
-
-    api.reupload_file(file_id, &name, &mime, data).await
+    api.reupload_file(file_id, &name, &mime, path).await
 }
 
-fn file_name_of(path: &Path) -> Result<String> {
+/// Replaces the content of an existing remote file through the chunked
+/// endpoints, for anything past [`REUPLOAD_MAX`]. Same outcome as [`reupload`]
+/// for a file too large for one request.
+pub async fn reupload_chunked(api: &ApiClient, file_id: i64, path: &Path) -> Result<ApiFile> {
+    let name = file_name_of(path)?;
+    let mime = mime_from_extension(path);
+    api.version_file_chunked(file_id, &name, &mime, path).await
+}
+
+pub(crate) fn file_name_of(path: &Path) -> Result<String> {
     Ok(path
         .file_name()
         .context("file has no name")?
         .to_string_lossy()
         .to_string())
+}
+
+/// The name a temp artifact takes: hidden, keeping the full name it stands in
+/// for and tagged with the object id, so two files never share one.
+pub fn temp_artifact_name(name: &str, file_id: i64) -> String {
+    format!(".{}{}{}", name, TEMP_MARKER, file_id)
 }
 
 /// Builds the temp path used while downloading `dest`: a hidden sibling keeping
@@ -115,7 +120,7 @@ pub fn temp_path_for(dest: &Path, file_id: i64) -> PathBuf {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    let temp_name = format!(".{}{}{}", name, TEMP_MARKER, file_id);
+    let temp_name = temp_artifact_name(&name, file_id);
 
     match dest.parent() {
         Some(parent) => parent.join(temp_name),

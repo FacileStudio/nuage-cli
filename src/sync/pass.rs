@@ -29,8 +29,9 @@ impl SyncEngine {
         Ok(report)
     }
 
-    /// Re-enumerates the space's whole tree and materialises anything missing
-    /// locally, whatever the cursor and the state database have drifted into.
+    /// Re-enumerates the space's whole tree: cleans up the objects an interrupted
+    /// replace left behind, and materialises anything missing locally, whatever
+    /// the cursor and the state database have drifted into.
     ///
     /// The change feed only reports items whose `updated_at` moved after the
     /// cursor. An item that was fetched and then skipped leaves no trace in that
@@ -40,6 +41,8 @@ impl SyncEngine {
     pub async fn verify_remote(&self) -> Result<SyncReport> {
         let mut report = SyncReport::default();
         let (folders, files) = remote::fetch_remote_tree(&self.api, self.target.space).await?;
+
+        self.sweep_abandoned_artifacts(&files, &mut report).await?;
 
         report.folders_created += self.process_remote_folders(&folders, &mut report).await?;
         self.process_remote_files(&files, &mut report).await?;

@@ -16,6 +16,13 @@ fn temp_paths_differ_for_same_name_different_id() {
 }
 
 #[test]
+fn temp_artifact_name_is_recognised_as_one_of_ours() {
+    let aside = temp_artifact_name("contrat.pdf", 77);
+    assert_eq!(aside, ".contrat.pdf.nuage-tmp-77");
+    assert!(is_temp_artifact(&aside));
+}
+
+#[test]
 fn temp_path_is_a_hidden_sibling_of_dest() {
     let dest = Path::new("/home/u/docs/notes.md");
     let tmp = temp_path_for(dest, 42);
