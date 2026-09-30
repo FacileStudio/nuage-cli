@@ -76,6 +76,72 @@ fn a_file_the_server_moved_follows_it_locally() {
     std::fs::remove_dir_all(&dir).expect("cleanup");
 }
 
+// The loop that grows `(1)` on every pass: the server holds the file under
+// `id_card (1).pdf` while the row still points at `Admin/id_card.pdf`.
+#[test]
+fn a_deduplicated_name_moves_without_leaving_the_old_row_behind() {
+    let dir = temp_dir("dedup-loop");
+    let engine = engine_in(&dir);
+
+    std::fs::create_dir_all(dir.join("Admin")).expect("dir");
+    std::fs::write(dir.join("Admin/id_card.pdf"), b"pdf").expect("write");
+    let content_hash = crate::hash::hash_file(&dir.join("Admin/id_card.pdf")).expect("hash");
+    tracked_folder(&engine, "176", "Admin");
+    tracked_file(&engine, "1422", "Admin/id_card.pdf", Some(&content_hash));
+
+    let mut report = SyncReport::default();
+    let handled = engine
+        .follow_remote_move(
+            &file_with_hash(1422, "id_card (1).pdf", Some(&content_hash)),
+            "Admin/id_card (1).pdf",
+            &mut report,
+        )
+        .expect("follow the move");
+
+    assert!(handled);
+    assert!(dir.join("Admin/id_card (1).pdf").is_file());
+    let rows = engine.state().all_files().expect("rows");
+    assert_eq!(rows.len(), 1, "one file, one row");
+    assert_eq!(rows[0].local_path, "Admin/id_card (1).pdf");
+    assert!(
+        engine
+            .state()
+            .get_file("Admin/id_card (1).pdf")
+            .expect("lookup")
+            .is_some(),
+        "the row must follow the file, or the next reconcile re-uploads it"
+    );
+
+    std::fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+// A server-side deduplicated name can outgrow what the filesystem allows. The
+// sync has to refuse it with a message that names the limit rather than let the
+// rename fail with a bare `File name too long`.
+#[test]
+fn an_impossible_server_name_is_refused_with_a_message() {
+    let dir = temp_dir("overlong");
+    let engine = engine_in(&dir);
+
+    std::fs::write(dir.join("short.pdf"), b"x").expect("write");
+    let long = format!("{}.pdf", "a".repeat(260));
+
+    let err = engine
+        .relocate_local_file("short.pdf", &long)
+        .expect_err("the name is past the filesystem limit");
+
+    assert!(
+        err.to_string().contains("this filesystem allows"),
+        "the message names the limit: {err}"
+    );
+    assert!(
+        dir.join("short.pdf").is_file(),
+        "the file is left where it was rather than half-moved"
+    );
+
+    std::fs::remove_dir_all(&dir).expect("cleanup");
+}
+
 // A file can be moved and edited in the same change. The moved copy has to be
 // tracked at its new path, but the hash the row keeps is the one both sides last
 // agreed on: recording the local hash would make the download pass read the edit
