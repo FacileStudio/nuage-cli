@@ -11,6 +11,50 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-30
+
+### Fixed
+
+- **A file the server moved was left tracked under its old path, and the next
+  pass uploaded the moved copy beside it as a second object.** The server
+  deduplicates a create against the names already in the folder, so that second
+  object came back as `name (1).ext`, was moved into place locally, and was
+  uploaded again — the loop that turns one rename into a directory full of
+  `(1)` copies. The tracking row now follows the file to the path the server
+  gives it. It keeps the hash both sides last agreed on, so a file that was moved
+  and edited in one change still resolves as a conflict instead of losing the
+  remote version.
+- **A local file whose name the server already held was uploaded as a second
+  object, which came back as `name (1).ext`.** The usual cause is tracking this
+  client lost — a re-synced directory, a rebuilt state database — and it hit
+  every file of the tree at once. A create the server renames is now read as the
+  collision it is: when the server's object holds the same bytes, the copy just
+  uploaded is dropped and the server's own object takes the file's path, so
+  share links and history stay on the file. Content that differs is a real
+  second file, and both are kept. Folders get the same treatment, so a re-synced
+  tree no longer grows a `name (1)` directory per level.
+- **Updating a file too large for the reupload endpoint created the new version
+  beside the old one, so the server renamed it `name (1).ext`.** That is every
+  edit of a file past `64 MiB`, and the rename came straight back down to local
+  disk. Updates above `64 MiB` now stream through `POST /files/{id}/reupload`,
+  and anything past the 100 MiB request limit goes through the chunked endpoints
+  naming the file it replaces — either way the file keeps its id, name, folder,
+  share links and version history. A server that predates the targeted upload
+  falls back to creating the new version beside the old object, which is renamed
+  out of the way first so the replacement keeps the file's own name.
+- **Uploading into a shared space was refused, or worse, wrote into the personal
+  one.** The file endpoints read `folder_id` and `space_id` from the request body,
+  not from the query string, so a request scoped only by `?space_id=` uploaded to
+  the personal space's root — silently — and failed with `folder not found` for a
+  folder inside a space. Both fields now travel with the upload, multipart or
+  chunked.
+- A remote file whose name is one of the client's own transfer artifacts
+  (`.<name>.nuage-tmp-<id>`) is no longer downloaded, and `nuage sync --verify`
+  now deletes the ones an interrupted large-file replace left on the server.
+  Only a crash between the rename and the upload strands one, and nothing else
+  could see it: it was landing on disk as a hidden file beside the file it
+  belongs to, and the server kept the bytes.
+
 ## [0.10.0] - 2026-09-24
 
 ### Added
@@ -325,7 +369,8 @@ by putting files in a space's mapped directory.
   them.
 - The daemon guards against PID 0 and stops creating a directory twice.
 
-[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/FacileStudio/nuage-cli/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/FacileStudio/nuage-cli/compare/v0.8.0...v0.8.1
