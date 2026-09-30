@@ -11,6 +11,16 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A deduplicated name the filesystem cannot hold failed with a bare
+  `File name too long` on every pass.** A server-side name like `id_card (1)
+  (1) …` grows without bound, and once it passed `NAME_MAX` the rename and the
+  download both errored with the raw OS message and the sync retried forever.
+  The limit is now checked before the rename and the download, and reported with
+  the file, the length it reached and the 255 bytes the filesystem allows, so
+  the cause is named instead of guessed.
+
 ## [0.10.2] - 2026-09-30
 
 ### Fixed

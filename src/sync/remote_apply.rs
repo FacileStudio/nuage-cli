@@ -71,6 +71,17 @@ impl SyncEngine {
             return Ok(None);
         };
 
+        if let Some(bytes) = resolver::overlong_file_name(&local_path) {
+            warn!(
+                "skipping {} — its name is {} bytes, past the {} bytes this filesystem allows for one file name; shorten it on the server, then run `nuage sync --retry-failed`",
+                file.name,
+                bytes,
+                resolver::MAX_NAME_BYTES
+            );
+            self.note_failure(&file.id.to_string(), "name exceeds the filesystem limit", report)?;
+            return Ok(None);
+        }
+
         if self.follow_remote_move(file, &relative, report)? {
             return Ok(None);
         }

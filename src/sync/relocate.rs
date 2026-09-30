@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::path::Path;
 use tracing::{debug, info, warn};
 
@@ -41,6 +41,16 @@ impl SyncEngine {
     pub(super) fn relocate_local_file(&self, from: &str, to: &str) -> Result<()> {
         let from_abs = self.target.dir.join(from);
         let to_abs = self.target.dir.join(to);
+
+        if let Some(bytes) = resolver::overlong_file_name(&to_abs) {
+            bail!(
+                "cannot rename {} to {} — the server's name for it is {} bytes, past the {} bytes this filesystem allows for one file name; shorten it on the server, then run `nuage sync --retry-failed`",
+                from,
+                to,
+                bytes,
+                resolver::MAX_NAME_BYTES
+            );
+        }
 
         if !from_abs.is_file() {
             return Ok(());

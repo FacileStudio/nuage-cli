@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 mod paths;
 
-pub use paths::unique_conflict_path;
+pub use paths::{overlong_file_name, unique_conflict_path, MAX_NAME_BYTES};
 
 /// Outcome of a three-way comparison between the local file, the remote file
 /// and the last hash both sides agreed on.

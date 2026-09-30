@@ -2,6 +2,26 @@ use std::path::{Path, PathBuf};
 
 const MAX_CONFLICT_PROBES: u32 = 1000;
 
+/// The longest a single path component may be on the filesystems Nuage syncs
+/// onto (Linux `NAME_MAX`). A server-side deduplicated name — `name (1).ext`,
+/// `name (1) (1).ext`, and so on — grows without bound, so a client that keeps
+/// applying it would eventually ask the filesystem for an impossible name and
+/// fail with a bare `ENAMETOOLONG` on every pass.
+pub const MAX_NAME_BYTES: usize = 255;
+
+/// Returns the byte length of `name` when one path component may not hold it.
+/// Counting bytes, not characters, is what the filesystems do.
+pub fn overlong_name(name: &str) -> Option<usize> {
+    (name.len() > MAX_NAME_BYTES).then_some(name.len())
+}
+
+/// The same check for a path's final component, or `None` when it has none.
+pub fn overlong_file_name(path: &Path) -> Option<usize> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .and_then(overlong_name)
+}
+
 /// Builds a sibling path of `original` that does not exist yet.
 ///
 /// Starts at `<stem>.conflict.<ext>` and walks `-2`, `-3`, ... until a free
@@ -70,6 +90,25 @@ mod tests {
     fn extensionless_name_gets_bare_conflict_suffix() {
         let p = unique_conflict_path(Path::new("/tmp/definitely-missing-xyz/README"));
         assert_eq!(p.file_name().unwrap().to_string_lossy(), "README.conflict");
+    }
+
+    #[test]
+    fn a_name_at_the_limit_is_allowed_and_one_past_it_is_not() {
+        assert_eq!(overlong_name(&"a".repeat(MAX_NAME_BYTES)), None);
+        assert_eq!(overlong_name(&"a".repeat(MAX_NAME_BYTES + 1)), Some(MAX_NAME_BYTES + 1));
+    }
+
+    #[test]
+    fn the_check_counts_bytes_not_characters() {
+        let multibyte = "\u{00e9}".repeat(MAX_NAME_BYTES);
+        assert_eq!(overlong_name(&multibyte), Some(MAX_NAME_BYTES * 2));
+    }
+
+    #[test]
+    fn a_long_file_name_is_reported_from_its_path() {
+        let path = Path::new("/tmp").join("x".repeat(MAX_NAME_BYTES + 1));
+        assert_eq!(overlong_file_name(&path), Some(MAX_NAME_BYTES + 1));
+        assert_eq!(overlong_file_name(Path::new("/tmp/ok.md")), None);
     }
 
     #[test]
