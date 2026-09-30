@@ -11,6 +11,25 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-09-30
+
+### Fixed
+
+- **A large-file update that failed after the old object was renamed aside left
+  the file hidden under the temp name only this client uses.** Reaching quota or
+  losing the connection at that moment made the file vanish from the web UI while
+  it stayed on disk locally, and the temp name is one the download pass skips, so
+  nothing brought it back. The replacement's bytes are now fully on the server
+  before the old object is touched, and a swap that still cannot finish puts the
+  old object back under its own name and drops the unplaced replacement, so the
+  file is exactly where it started rather than half-moved.
+- **Adopting a server folder this client already held could record a folder that
+  had just been deleted.** The empty duplicate the create made was removed before
+  the server's own folder was recorded, so a record that failed left the client
+  tracking a folder id that no longer existed, and every upload naming it was
+  refused with `parent folder not found`. The server's folder is recorded first
+  now, and the duplicate is removed once it is.
+
 ## [0.10.1] - 2026-09-30
 
 ### Fixed

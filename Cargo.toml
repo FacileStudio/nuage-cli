@@ -1,6 +1,6 @@
 [package]
 name = "nuage-cli"
-version = "0.10.1"
+version = "0.10.2"
 edition = "2021"
 description = "File sync daemon for Nuage"
 
