@@ -59,9 +59,12 @@ impl SyncEngine {
                 Ok(())
             }
             ChunkedUpdate::SecondObject(uploaded) => {
-                self.swap_in_new_object(&replacement, Some(&uploaded)).await
+                self.swap_in_new_object(&replacement, &uploaded).await
             }
-            ChunkedUpdate::Nothing => self.swap_in_new_object(&replacement, None).await,
+            ChunkedUpdate::Nothing => {
+                let uploaded = self.upload_fresh(&replacement).await?;
+                self.swap_in_new_object(&replacement, &uploaded).await
+            }
         }
     }
 
@@ -99,33 +102,31 @@ impl SyncEngine {
         Ok(ChunkedUpdate::SecondObject(uploaded))
     }
 
-    /// Makes a new object the content of the file, in place of the object that
-    /// holds the file's name now. Uploads it first when none was prepared.
+    /// Makes the object that holds the new bytes the file, in place of the object
+    /// that holds its name now.
     ///
-    /// The old object is renamed out of the way before the new one takes the
-    /// name: the server deduplicates a create against the names already in the
-    /// folder, so the replacement would otherwise be stored as `name (1).ext`.
-    /// The old object is removed once the new one is tracked, and put back under
-    /// its own name if the replacement cannot be named.
+    /// The bytes are already on the server, so nothing is done to the old object
+    /// until replacing it can actually finish: renaming it away first and then
+    /// failing to name the new one would hide the file under a name only this
+    /// client uses. A swap that cannot be completed puts the old object back
+    /// under its own name and drops the replacement, so the file is exactly where
+    /// it started and no `name (1).ext` is left to sync back down.
     async fn swap_in_new_object(
         &self,
         replacement: &Replacement<'_>,
-        prepared: Option<&ApiFile>,
+        uploaded: &ApiFile,
     ) -> Result<()> {
         let name = transfer::file_name_of(Path::new(replacement.relative))?;
         let size = std::fs::metadata(replacement.path)
             .map(|m| m.len())
             .unwrap_or(0);
-        let aside = self
-            .move_aside(replacement.old_id, replacement.relative)
-            .await?;
 
-        let placed = match prepared {
-            Some(uploaded) => {
-                self.place_upload(replacement, uploaded, &name, &aside)
-                    .await?
+        let placed = match self.move_and_name(replacement, uploaded, &name).await {
+            Ok(placed) => placed,
+            Err(e) => {
+                self.discard_replacement(uploaded).await;
+                return Err(e);
             }
-            None => self.upload_named(replacement, &name, &aside).await?,
         };
 
         self.commit_swap(replacement, &placed).await?;
@@ -135,6 +136,40 @@ impl SyncEngine {
             transfer::format_size(size)
         );
         Ok(())
+    }
+
+    /// Renames the old object aside and gives the replacement the file's name,
+    /// putting the old object back under its own name when the name cannot be
+    /// taken.
+    async fn move_and_name(
+        &self,
+        replacement: &Replacement<'_>,
+        uploaded: &ApiFile,
+        name: &str,
+    ) -> Result<ApiFile> {
+        let aside = self
+            .move_aside(replacement.old_id, replacement.relative)
+            .await?;
+
+        match self.rename_upload(uploaded, name).await {
+            Ok(placed) => Ok(placed),
+            Err(e) => {
+                self.restore_name(replacement.old_id, replacement.relative, &aside)
+                    .await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Removes the replacement object a swap could not place, so its bytes never
+    /// come back down as a second copy beside the file.
+    async fn discard_replacement(&self, uploaded: &ApiFile) {
+        if let Err(e) = self.api.delete_file(uploaded.id).await {
+            warn!(
+                "could not remove the unplaced replacement {}: {}",
+                uploaded.name, e
+            );
+        }
     }
 
     /// Records the replacement and removes the object it replaced.
@@ -156,39 +191,21 @@ impl SyncEngine {
         Ok(())
     }
 
-    /// Uploads the file, then gives the object the file's own name.
-    async fn upload_named(
-        &self,
-        replacement: &Replacement<'_>,
-        name: &str,
-        aside: &str,
-    ) -> Result<ApiFile> {
+    /// Uploads the file as a new object, for a server that could not take the
+    /// bytes as a version of the existing one. The old object still holds the
+    /// file's name, so the server stores this as `name (1).ext`; the swap gives
+    /// it the file's own name once the old object is out of the way.
+    async fn upload_fresh(&self, replacement: &Replacement<'_>) -> Result<ApiFile> {
         let folder_id = self.find_parent_folder_id(replacement.relative)?;
-        let uploaded = transfer::upload(&self.api, replacement.path, folder_id).await?;
-        self.place_upload(replacement, &uploaded, name, aside).await
+        transfer::upload(&self.api, replacement.path, folder_id).await
     }
 
-    /// Names an uploaded object after the file, restoring the old object's name
-    /// when the server refuses.
-    async fn place_upload(
-        &self,
-        replacement: &Replacement<'_>,
-        uploaded: &ApiFile,
-        name: &str,
-        aside: &str,
-    ) -> Result<ApiFile> {
+    /// Gives an uploaded object the file's own name.
+    async fn rename_upload(&self, uploaded: &ApiFile, name: &str) -> Result<ApiFile> {
         if uploaded.name == name {
             return Ok(uploaded.clone());
         }
-
-        match self.api.update_file(uploaded.id, Some(name), None).await {
-            Ok(placed) => Ok(placed),
-            Err(e) => {
-                self.restore_name(replacement.old_id, replacement.relative, aside)
-                    .await;
-                Err(e)
-            }
-        }
+        self.api.update_file(uploaded.id, Some(name), None).await
     }
 
     /// Renames the remote object out of the way so the replacement can take its
@@ -209,7 +226,8 @@ impl SyncEngine {
         Ok(aside)
     }
 
-    /// Puts the previous object back under its own name after a failed upload.
+    /// Puts the previous object back under its own name after a swap it could not
+    /// finish, so a failure never leaves the file hidden under the aside name.
     async fn restore_name(&self, facile_id: i64, relative: &str, aside: &str) {
         let Ok(name) = transfer::file_name_of(Path::new(relative)) else {
             return;

@@ -69,16 +69,15 @@ impl SyncEngine {
             return Ok(false);
         };
 
-        if let Err(e) = self.api.delete_folder(created.id).await {
-            warn!(
-                "could not remove the extra folder {} the create made ({}): {}",
-                relative, created.name, e
-            );
+        if !self.record_folder(&existing, relative)? {
             return Ok(false);
         }
 
-        if !self.record_folder(&existing, relative)? {
-            return Ok(false);
+        if let Err(e) = self.api.delete_folder(created.id).await {
+            warn!(
+                "adopted folder {} but could not remove the empty duplicate {} the create made: {}",
+                relative, created.name, e
+            );
         }
 
         info!("↩ adopted folder {} — the server already held it", relative);
