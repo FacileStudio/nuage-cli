@@ -5,6 +5,9 @@ use tracing::{info, warn};
 use super::{transfer, SyncEngine};
 use crate::api::ApiFile;
 
+#[cfg(test)]
+mod tests;
+
 /// What a chunked update managed to do with the new bytes.
 enum ChunkedUpdate {
     /// They went into the file, which kept its id and history.
