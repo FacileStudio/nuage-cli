@@ -6,6 +6,7 @@ use crate::commands::space::PERSONAL;
 use crate::config::{self, Config};
 use crate::ui;
 
+use super::device::device_login;
 use super::prompt::{api_base, ask_sync_dir, prompt_token, resolve_server};
 use super::sso::{discover, sso, AuthConfig};
 
@@ -16,22 +17,22 @@ const DEFAULT_IGNORE: [&str; 5] = [".DS_Store", "*.tmp", ".nuage/", "Thumbs.db",
 /// Signs in and writes the credential into `~/.nuage.yml`, preserving every
 /// field the login does not own.
 ///
-/// The browser flow is the default because the suite runs `SSO_ONLY=true`: the
-/// CLI never sees the identity provider, never handles a password, and never
-/// holds an authorization code that is worth anything on its own. It opens a
-/// loopback port, sends the browser to the API with that port and a nonce
-/// attached, and the API — after the provider has done its part — redirects
-/// back with a one-time code valid for sixty seconds and usable once.
+/// The default is the RFC 8628 device grant against Registre: the CLI prints
+/// an approval link, polls until the browser approves it, and trades the
+/// Registre access token for a Nuage session. Nothing listens on this machine,
+/// so it works over SSH.
 ///
-/// `force_token` and a machine with no browser both fall back to pasting an API
-/// token, because a headless box still needs a way in.
-pub async fn run(server: Option<String>, force_token: bool) -> Result<()> {
+/// `listener` opts into the loopback flow instead, which is also the fallback
+/// when the server has not mounted the device exchange. `force_token` and a
+/// failed browser sign-in both fall back to pasting an API token, because a
+/// headless box still needs a way in.
+pub async fn run(server: Option<String>, force_token: bool, listener: bool) -> Result<()> {
     let fresh = !Config::path()?.exists();
     let server = resolve_server(server);
     let api = api_base(&server);
 
     let auth = discover(&api).await;
-    let token = acquire_token(&api, &auth, force_token).await?;
+    let token = acquire_token(&api, &auth, force_token, listener).await?;
 
     let mut config = Config::load_or_default()?;
     config.server_url = api.clone();
@@ -70,7 +71,7 @@ pub fn logout() -> Result<()> {
     Ok(())
 }
 
-async fn acquire_token(api: &str, auth: &AuthConfig, force_token: bool) -> Result<String> {
+async fn acquire_token(api: &str, auth: &AuthConfig, force_token: bool, listener: bool) -> Result<String> {
     if force_token || !auth.oidc_enabled {
         if auth.sso_only && !force_token {
             bail!("this instance accepts single sign-on only but did not advertise it — run `nuage login --token` with an API token from the dashboard");
@@ -78,7 +79,7 @@ async fn acquire_token(api: &str, auth: &AuthConfig, force_token: bool) -> Resul
         return prompt_token();
     }
 
-    match sso(api).await {
+    match sign_in(api, listener).await {
         Ok(token) => Ok(token),
         Err(err) if !auth.sso_only && io::stdin().is_terminal() => {
             ui::warn(&format!("{err:#}"));
@@ -87,6 +88,16 @@ async fn acquire_token(api: &str, auth: &AuthConfig, force_token: bool) -> Resul
         }
         Err(err) => Err(err),
     }
+}
+
+async fn sign_in(api: &str, listener: bool) -> Result<String> {
+    if !listener {
+        if let Some(token) = device_login(api).await? {
+            return Ok(token);
+        }
+        ui::hint("This server has no device sign-in yet, falling back to the browser listener.");
+    }
+    sso(api).await
 }
 
 async fn finish_login(config: &Config) -> Result<()> {

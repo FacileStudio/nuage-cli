@@ -42,20 +42,39 @@ Signs in and writes `server_url` and `token` into `~/.nuage.yml`. On a first run
 ```sh
 nuage login
 nuage login https://nuage.example.com
+nuage login --listener
 nuage login --token
 ```
 
 | Flag | What it does |
 |---|---|
 | `[url]`, `--server <url>` | The instance, default `https://nuage.facile.studio`. The `/api` suffix is appended if you leave it off |
+| `--listener` | Use the loopback listener flow instead of the approval link. Needs a browser on this machine |
 | `--token` | Skip the browser and paste an API token instead |
 
 The server URL is resolved flag first, then `NUAGE_SERVER_URL`, then whatever is already in the
 config file, then `https://nuage.facile.studio`. Nothing prompts for it.
 
-**The browser flow.** `nuage login` first asks the server what it accepts, with
+**The device flow (default).** `nuage login` first asks the server what it accepts, with
 `GET <server_url>/auth/config`, which answers `{"sso_only":true,"oidc_enabled":true}` on a
 Facile deployment. When OIDC is enabled the CLI:
+
+1. probes `POST <server_url>/auth/oidc/device/exchange`; a 404 means the server has not shipped
+   it, so the CLI prints a one-line notice and runs the listener flow below instead;
+2. reads Registre's endpoints from `https://sso.facile.studio/.well-known/openid-configuration`;
+3. starts a device sign-in as the public client `facile-cli` with scope `openid email profile`;
+4. prints `verification_uri_complete` (the user code is shown only as a confirmation hint) and
+   tries to open it in a browser, ignoring failure;
+5. polls the token endpoint, honoring `interval`, `slow_down` (+5s each time),
+   `authorization_pending`, `expired_token` and `access_denied`;
+6. trades the Registre access token for a Nuage token over
+   `POST <server_url>/auth/oidc/device/exchange` with `{"access_token": "..."}`.
+
+Nothing listens on the machine and nothing is pasted, so this works over SSH. A 401 from the
+exchange means the account has never signed in to Nuage through a browser: sign in once at the
+server's web page, then run `nuage login` again.
+
+**The listener flow.** `nuage login --listener`, or the fallback above:
 
 1. binds `127.0.0.1:0` and takes the ephemeral port, so two shells can log in at once;
 2. generates a 16-byte nonce from `/dev/urandom`;
@@ -70,9 +89,9 @@ The token never travels in a URL, so it cannot land in browser history, a `Refer
 proxy log. The wait times out after three minutes.
 
 **The token flow.** Pass `--token` and the CLI prompts for an API token minted in the dashboard
-under Settings then API, reading it without echo. This is the path for a headless machine.
-Login also falls back to it on its own when a browser cannot be opened, unless the instance
-reports `sso_only`, in which case there is nothing to fall back to and it says so.
+under Settings then API, reading it without echo. Login also falls back to it on its own when
+the browser sign-in fails, unless the instance reports `sso_only`, in which case there is
+nothing to fall back to and it says so.
 
 **What is preserved.** Login is a read-modify-write. Only `server_url`, `token` and, on a first
 run, `spaces` change; `poll_interval`, `ignore` and `key_command` are read from the existing file

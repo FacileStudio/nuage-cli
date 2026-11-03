@@ -59,7 +59,7 @@ Config lives at `~/.nuage.yml` -- see `config.example.yaml` for the format.
 `watch` -- foreground watcher (debug mode)  
 `status` -- show daemon and sync status  
 `logs` -- show daemon logs (`-f` to follow)  
-`login` -- interactive setup  
+`login` -- sign in with a browser approval link (device grant, works over SSH); `--listener` for the loopback flow, `--token` to paste a token  
 `upgrade` -- self-upgrade from GitHub  
 `share`, `unshare`, `shares` -- share link management  
 `search` -- search files/folders  

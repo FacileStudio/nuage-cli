@@ -103,7 +103,7 @@ than a live server.
 | `src/main.rs` | The clap tree and the dispatch from a subcommand to its handler |
 | `src/commands/` | One module per command group, plus the daemon supervisor |
 | `src/config/` | `Config`, its defaults, validation, `spaces_expanded`, `save` |
-| `src/login/` | The browser SSO loopback flow, the API-token fallback, logout |
+| `src/login/` | The device grant (default), the browser SSO loopback flow, the API-token fallback, logout |
 | `src/api/` | `ApiClient`, both HTTP clients, response models, one method per endpoint |
 | `src/daemon/` | PID and log paths, `is_running`, the two logging initializers |
 | `src/handoff.rs` | The sign-in page the loopback listener serves, and the template it renders |

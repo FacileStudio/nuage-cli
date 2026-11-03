@@ -12,9 +12,10 @@ use super::loopback::{nonce, wait_for_code};
 /// tab does not leave a listener open forever.
 const WAIT: Duration = Duration::from_secs(180);
 
+/// The session a Nuage exchange route hands back.
 #[derive(Deserialize)]
-struct ExchangeResponse {
-    token: String,
+pub(super) struct ExchangeResponse {
+    pub(super) token: String,
 }
 
 /// What the server says it will accept. Absent or unreadable, we assume the
@@ -99,7 +100,9 @@ async fn exchange(api: &str, code: &str) -> Result<String> {
     Ok(exchanged.token)
 }
 
-fn open_browser(url: &str) -> Result<()> {
+/// Starts the platform's URL opener without waiting for it. stdin is closed so
+/// a terminal browser picked by `xdg-open` over SSH cannot take the terminal.
+pub(super) fn open_browser(url: &str) -> Result<()> {
     let command = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(target_os = "windows") {
@@ -107,13 +110,11 @@ fn open_browser(url: &str) -> Result<()> {
     } else {
         "xdg-open"
     };
-    let status = std::process::Command::new(command)
+    std::process::Command::new(command)
         .arg(url)
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status()?;
-    if !status.success() {
-        bail!("browser command failed");
-    }
+        .spawn()?;
     Ok(())
 }

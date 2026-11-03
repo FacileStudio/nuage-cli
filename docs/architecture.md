@@ -191,8 +191,14 @@ carries that target's space and appends `?space_id=` where a route accepts it.
 | `GET` | `/auth/config` | Which login flows the instance accepts |
 | `GET` | `/auth/oidc?flow=cli&port=&cli_state=` | Start the browser sign-in |
 | `POST` | `/auth/oidc/exchange` | Trade the one-time code for a token |
+| `POST` | `/auth/oidc/device/exchange` | Trade a Registre access token for a token (device flow) |
 
-The three `/auth` endpoints are served by [porte](https://github.com/FacileStudio/porte), the
+The default login also talks to Registre directly: it reads
+`https://sso.facile.studio/.well-known/openid-configuration`, then calls the
+`device_authorization_endpoint` and `token_endpoint` it names (`login/grant.rs`, polling rules in
+`login/poll.rs`).
+
+The four `/auth` endpoints are served by [porte](https://github.com/FacileStudio/porte), the
 suite's Go auth kit, and are the only ones `nuage` calls without a bearer token. `login.rs`
 uses a plain `reqwest::Client` for them rather than `ApiClient`, which exists to attach
 credentials it does not yet have.

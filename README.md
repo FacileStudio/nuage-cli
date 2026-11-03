@@ -67,25 +67,31 @@ Full command reference and flags: [docs/usage.md](docs/usage.md).
 
 ## Signing in
 
-`nuage login` asks the server which flows it accepts (`GET /auth/config`) and then opens your
-browser. The CLI listens on an ephemeral loopback port, the server sends the browser back with
-a single-use code valid for sixty seconds, and the CLI exchanges that code for a token. No
-credential is ever typed into the terminal or left in a URL.
+`nuage login` prints a browser approval link from the suite's identity provider,
+`https://sso.facile.studio`, and tries to open it. Approve the sign-in on any device with a
+browser; the CLI polls until you do, then trades the approval for a Nuage token. Nothing listens
+on your machine and nothing is pasted, so it works over SSH and on a headless server. This is
+the OAuth 2.0 device grant (RFC 8628).
 
-The page the browser lands on at the end is the suite's, not this repo's: `src/handoff.html.tmpl`
+`nuage login --listener` keeps the older loopback flow, for a machine with its own browser: the
+CLI listens on an ephemeral loopback port, the server sends the browser back with a single-use
+code valid for sixty seconds, and the CLI exchanges that code for a token. Login also uses it on
+its own, with a one-line notice, when the server has not mounted the device exchange.
+
+The page the browser lands on at the end of the listener flow is the suite's, not this repo's: `src/handoff.html.tmpl`
 is a byte-for-byte copy of the template every Facile tool renders, so a `nuage` login and a
 `courrier` one end on the same page. A callback the listener refuses, one carrying no code or the
 wrong nonce, gets that page too, colored as a warning and saying the login is still waiting.
 
 ```sh
 nuage login https://nuage.example.com   # self-hosted; default is https://nuage.facile.studio
+nuage login --listener                             # loopback flow, needs a local browser
 nuage login --token                                # paste an API token instead
 nuage logout                                       # clear the token, keep your sync settings
 ```
 
-Use `--token` on a machine with no browser: mint a token in the dashboard under Settings then
-API and paste it at the prompt. Login also falls back to it on its own if a browser cannot be
-opened and the instance permits it.
+Use `--token` to paste an API token minted in the dashboard under Settings then API. Login also
+falls back to it on its own if the browser sign-in fails and the instance permits it.
 
 Both commands rewrite only `server_url` and `token`, plus `spaces` on a first run. Your
 `poll_interval`, `ignore` and `key_command` are read, kept and written back untouched.
@@ -143,7 +149,7 @@ src/
   main.rs      clap tree and dispatch
   commands/    one module per command group, plus the daemon supervisor
   config/      ~/.nuage.yml model, validation, env overrides, saving
-  login/       browser SSO loopback flow, API-token fallback, logout
+  login/       device grant, browser SSO loopback flow, API-token fallback, logout
   api/         Nuage REST client and response models
   daemon/      PID file, log paths, daemon and terminal logging setup
   handoff.rs   the sign-in page the loopback listener serves, shared with the suite

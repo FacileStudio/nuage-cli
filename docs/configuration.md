@@ -206,6 +206,7 @@ already have one. `nuage token revoke <id>` invalidates one.
 | `invalid config at ...` | Malformed YAML |
 | `not signed in — run \`nuage login\`, or set NUAGE_TOKEN` | Signed out, or never signed in |
 | the server refused the login code (400) | The one-time code expired. It lasts sixty seconds |
+| the server does not know this account yet | The account never signed in to Nuage in a browser. Sign in once on the web, then log in again |
 | `GET /sync/state failed (401): ...` | Wrong or revoked token |
 | `GET /sync/state failed (404): ...` | `server_url` is missing the `/api` suffix |
 | `cannot create sync directory: ...` | A mapped directory is not writable |

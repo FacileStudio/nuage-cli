@@ -32,4 +32,10 @@ pub struct LoginArgs {
         help = "Paste an API token instead of signing in through the browser"
     )]
     pub token: bool,
+    #[arg(
+        long,
+        conflicts_with = "token",
+        help = "Use the loopback listener instead of the approval link (needs a browser on this machine)"
+    )]
+    pub listener: bool,
 }

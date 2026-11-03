@@ -11,6 +11,23 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-03
+
+### Changed
+
+- **`nuage login` signs in with a browser approval link and works over SSH.** It
+  uses the OAuth 2.0 device grant against `https://sso.facile.studio`: the CLI
+  prints the link, tries to open it, polls until the sign-in is approved on any
+  device, then trades the approval for a Nuage token at
+  `POST /auth/oidc/device/exchange`. Nothing listens on the machine and nothing
+  is pasted.
+
+### Added
+
+- `nuage login --listener` keeps the loopback listener flow. Login also falls
+  back to it, with a one-line notice, when the server answers 404 on the device
+  exchange.
+
 ## [0.11.0] - 2026-11-03
 
 ### Changed
@@ -413,7 +430,9 @@ by putting files in a space's mapped directory.
   them.
 - The daemon guards against PID 0 and stops creating a directory twice.
 
-[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.10.3...HEAD
+[Unreleased]: https://github.com/FacileStudio/nuage-cli/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/FacileStudio/nuage-cli/compare/v0.10.3...v0.11.0
 [0.10.3]: https://github.com/FacileStudio/nuage-cli/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/FacileStudio/nuage-cli/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/FacileStudio/nuage-cli/compare/v0.10.0...v0.10.1
