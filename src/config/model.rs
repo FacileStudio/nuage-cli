@@ -100,6 +100,9 @@ impl Config {
         if let Some(url) = env_server_url() {
             self.server_url = url;
         }
+        if self.server_url.is_empty() {
+            self.server_url = crate::login::DEFAULT_SERVER.to_string();
+        }
         if let Some(token) = env_token() {
             self.token = token;
         }
@@ -107,11 +110,6 @@ impl Config {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.server_url.is_empty() {
-            bail!(
-                "no server_url configured — run `nuage login --server https://nuage.example.com`"
-            );
-        }
         if self.token.is_empty() {
             bail!(
                 "not signed in — run `nuage login`, set NUAGE_TOKEN, or name a key_command in ~/.nuage.yml"

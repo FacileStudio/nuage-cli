@@ -11,6 +11,19 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-03
+
+### Changed
+
+- **`nuage login` with no URL signs in at `https://nuage.facile.studio`.** The
+  address now comes from the argument, then `--server`, `NUAGE_SERVER_URL`, the
+  config file, and finally that default. Nothing prompts for it any more, and a
+  config with no `server_url` falls back to it too.
+
+### Added
+
+- `nuage login <url>` takes the server as a positional argument.
+
 ## [0.10.3] - 2026-10-01
 
 ### Fixed

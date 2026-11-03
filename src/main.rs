@@ -129,7 +129,7 @@ async fn dispatch(command: Command, json: bool) -> Result<()> {
         Command::Watch => sync_cmds::cmd_watch().await,
         Command::Sync(args) => sync_cmds::cmd_sync(&args).await,
         Command::Status => status::cmd_status().await,
-        Command::Login(args) => login::run(args.server, args.token).await,
+        Command::Login(args) => login::run(args.url.or(args.server), args.token).await,
         Command::Logout => login::logout(),
         Command::Upgrade => upgrade::cmd_upgrade().await,
         Command::Share(args) => shares::cmd_share(&args, json).await,

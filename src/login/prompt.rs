@@ -4,6 +4,7 @@ use std::io::{self, IsTerminal, Write};
 use crate::config::{self, Config};
 use crate::ui;
 
+pub const DEFAULT_SERVER: &str = "https://nuage.facile.studio";
 const DEFAULT_SYNC_DIR: &str = "~/Nuage";
 
 pub(super) fn prompt_token() -> Result<String> {
@@ -58,29 +59,19 @@ pub(super) fn api_base(server: &str) -> String {
     format!("{trimmed}/api")
 }
 
-pub(super) fn resolve_server(server: Option<String>) -> Result<String> {
+pub(super) fn resolve_server(server: Option<String>) -> String {
     if let Some(server) = server {
-        return Ok(server);
+        return server;
     }
     if let Some(url) = config::env_server_url() {
-        return Ok(url);
+        return url;
     }
     if let Ok(existing) = Config::load_or_default() {
         if !existing.server_url.is_empty() {
-            return Ok(existing.server_url);
+            return existing.server_url;
         }
     }
-    if io::stdin().is_terminal() {
-        print!("Server URL: ");
-        io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let trimmed = input.trim();
-        if !trimmed.is_empty() {
-            return Ok(trimmed.to_string());
-        }
-    }
-    bail!("no server known — run `nuage login --server https://nuage.example.com`")
+    DEFAULT_SERVER.to_string()
 }
 
 #[cfg(test)]

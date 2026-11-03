@@ -41,17 +41,17 @@ Signs in and writes `server_url` and `token` into `~/.nuage.yml`. On a first run
 
 ```sh
 nuage login
-nuage login --server https://nuage.facile.studio
+nuage login https://nuage.example.com
 nuage login --token
 ```
 
 | Flag | What it does |
 |---|---|
-| `--server <url>` | The instance. The `/api` suffix is appended if you leave it off |
+| `[url]`, `--server <url>` | The instance, default `https://nuage.facile.studio`. The `/api` suffix is appended if you leave it off |
 | `--token` | Skip the browser and paste an API token instead |
 
 The server URL is resolved flag first, then `NUAGE_SERVER_URL`, then whatever is already in the
-config file, then a prompt.
+config file, then `https://nuage.facile.studio`. Nothing prompts for it.
 
 **The browser flow.** `nuage login` first asks the server what it accepts, with
 `GET <server_url>/auth/config`, which answers `{"sso_only":true,"oidc_enabled":true}` on a

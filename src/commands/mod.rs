@@ -19,7 +19,13 @@ use clap::Args;
 
 #[derive(Args)]
 pub struct LoginArgs {
-    #[arg(long, help = "Server URL, with or without the /api suffix")]
+    #[arg(
+        value_name = "URL",
+        conflicts_with = "server",
+        help = "Server URL, with or without the /api suffix [default: https://nuage.facile.studio]"
+    )]
+    pub url: Option<String>,
+    #[arg(long, help = "Server URL, same as the positional URL")]
     pub server: Option<String>,
     #[arg(
         long,

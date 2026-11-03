@@ -27,7 +27,7 @@ const DEFAULT_IGNORE: [&str; 5] = [".DS_Store", "*.tmp", ".nuage/", "Thumbs.db",
 /// token, because a headless box still needs a way in.
 pub async fn run(server: Option<String>, force_token: bool) -> Result<()> {
     let fresh = !Config::path()?.exists();
-    let server = resolve_server(server)?;
+    let server = resolve_server(server);
     let api = api_base(&server);
 
     let auth = discover(&api).await;

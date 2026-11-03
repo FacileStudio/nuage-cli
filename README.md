@@ -78,7 +78,7 @@ is a byte-for-byte copy of the template every Facile tool renders, so a `nuage` 
 wrong nonce, gets that page too, colored as a warning and saying the login is still waiting.
 
 ```sh
-nuage login --server https://nuage.facile.studio   # the /api suffix is added for you
+nuage login https://nuage.example.com   # self-hosted; default is https://nuage.facile.studio
 nuage login --token                                # paste an API token instead
 nuage logout                                       # clear the token, keep your sync settings
 ```
