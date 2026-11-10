@@ -11,6 +11,10 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+### Added
+
+- nuage-cli is released under the [MIT License](LICENSE).
+
 ## [0.12.0] - 2026-11-03
 
 ### Changed
