@@ -11,9 +11,16 @@ tag is v0.2.0; everything before it is folded into that entry.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-11
+
 ### Added
 
 - nuage-cli is released under the [MIT License](LICENSE).
+
+### Fixed
+
+- rusqlite moves to 0.41, which bundles a patched SQLite (libsqlite3-sys 0.39).
+- Dependencies carry the patched quinn-proto, rustls, rustls-webpki, webpki-roots, tokio and rustix releases.
 
 ## [0.12.0] - 2026-11-03
 
